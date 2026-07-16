@@ -15,6 +15,8 @@ Material consolidado durante la migración:
   copia histórica `Documents/Reproductor`.
 - `docs/migrations/reproductor-working-tree-2026-07-15.patch`: cambios locales
   divergentes de esa copia, preservados antes de la consolidación.
+- `exports/`: reportes de letras y transcripción recuperados de la última rama
+  operativa de `Reproductor`.
 
 ## Estado actual
 
