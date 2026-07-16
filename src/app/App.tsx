@@ -676,8 +676,9 @@ export function App() {
   useEffect(() => {
     if (playing && !audioCtxRef.current && audio.current) {
       try {
-        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-        const ctx = new AudioContext();
+        const AudioContextConstructor = window.AudioContext || (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextConstructor) return;
+        const ctx = new AudioContextConstructor();
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 1024;
         analyser.smoothingTimeConstant = visualizerSmoothing;
@@ -691,7 +692,7 @@ export function App() {
         console.warn("Could not initialize AudioContext", err);
       }
     }
-  }, [playing]);
+  }, [playing, visualizerSmoothing]);
   useEffect(() => {
     if (!themeReady.current) {
       themeReady.current = true;

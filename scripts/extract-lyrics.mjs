@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
-const libraryPath = path.join(root, 'suno-library.json');
 const playerDir = path.join(root, 'public', 'player');
 const lyricsDir = path.join(root, 'public', 'lyrics');
 

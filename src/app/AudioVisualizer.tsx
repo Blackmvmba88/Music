@@ -45,9 +45,8 @@ export function AudioVisualizer({
 
     let currentColor = color;
     let lastBeatTime = 0;
-    let isBeatActive = false;
     // Historial básico para detectar picos
-    let bassEnergyHistory: number[] = [];
+    const bassEnergyHistory: number[] = [];
 
     const draw = () => {
       const dpr = window.devicePixelRatio || 1;

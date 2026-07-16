@@ -2,7 +2,6 @@ const http = require("node:http");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
 const { extractTextKeywords, sanitizeKeywords } = require("./metadata-keywords.cjs");
 
 const MIME = {

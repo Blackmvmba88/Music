@@ -1,3 +1,4 @@
+/* global console */
 const DEFAULT = { email: "a", displayName: "b", roles: ["creator", "player"], sessions: [], ratings: {} };
 const KEY = "pulso.profile.v1";
 

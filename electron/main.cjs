@@ -1,4 +1,5 @@
-const { app, BrowserWindow, globalShortcut, Menu, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, globalShortcut, Menu, shell, ipcMain, dialog } = require('electron');
+const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
@@ -9,7 +10,6 @@ const USB_SUNO_PATH = '/Volumes/ADATA SC740/01_MEDIA_AUDIO/SUNO_WAV';
 let window;
 let localOrigin;
 let normalBounds;
-let creatingWindow;
 const sendTransport = (action) => window?.webContents.send('transport', action);
 
 async function createWindow() {
@@ -73,7 +73,12 @@ ipcMain.handle('suno-check-usb', async () => {
 });
 
 ipcMain.handle('suno-download-wav', async (event, { id, title }) => {
-  const safeTitle = (title || id).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 120);
+  const safeTitle = (title || id)
+    .replace(/[<>:"/\\|?*]/g, '_')
+    .split('')
+    .map((character) => character.charCodeAt(0) < 32 ? '_' : character)
+    .join('')
+    .slice(0, 120);
   const destPath = path.join(USB_SUNO_PATH, `${safeTitle} [${id.slice(0, 8)}].wav`);
 
   // Already downloaded?
