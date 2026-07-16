@@ -22,7 +22,71 @@ const json = (res, status, body) => {
   });
   res.end(JSON.stringify(body));
 };
+const readJsonBody = async (req) => {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 1024 * 1024) throw new Error("request_too_large");
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+};
+const sanitizeRatings = (value) => {
+  const ratings = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return ratings;
+  for (const [key, rating] of Object.entries(value)) {
+    const numeric = Number(rating);
+    if (key && Number.isInteger(numeric) && numeric >= 1 && numeric <= 5)
+      ratings[key] = numeric;
+  }
+  return ratings;
+};
 const safeId = (value) => (/^[a-zA-Z0-9_-]+$/.test(value || "") ? value : null);
+const normalizeTitle = (value = "") =>
+  value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+const durationSeconds = (value) => {
+  if (typeof value === "number") return value;
+  const parts = String(value || "").split(":").map(Number);
+  return parts.some(Number.isNaN)
+    ? 0
+    : parts.reduce((total, part) => total * 60 + part, 0);
+};
+
+const DEFERRED_TRACK_FIELDS = new Set([
+  "lyrics",
+  "description",
+  "evidence",
+  "warnings",
+  "sunoCandidates",
+]);
+const splitCatalog = (catalog) => {
+  const detailsById = new Map();
+  const tracks = catalog.tracks.map((track) => {
+    const summary = {};
+    const details = {};
+    for (const [key, value] of Object.entries(track)) {
+      (DEFERRED_TRACK_FIELDS.has(key) ? details : summary)[key] = value;
+    }
+    detailsById.set(track.id, details);
+    return summary;
+  });
+  return {
+    publicCatalog: {
+      tracks,
+      confidence: catalog.confidence,
+      evidence: catalog.evidence,
+      warnings: catalog.warnings,
+      fallbackReason: catalog.fallbackReason,
+    },
+    detailsById,
+  };
+};
 
 async function findLibraryRoot() {
   const candidates = [
@@ -81,16 +145,43 @@ async function createCatalog(root, appRoot, origin) {
         warnings: item.warnings || [],
         fallbackReason: item.fallbackReason ?? null,
         ownership: item.ownership || null,
+        platforms: {
+          local: { available: true, format: path.extname(audioPath).slice(1).toLowerCase() },
+          suno: { available: false },
+          soundcloud: { available: false },
+        },
       });
     }
   }
-  const auditPath = path.join(appRoot, "dist", "player", "source-audit.json");
+  const bundledAuditPath = path.join(appRoot, "dist", "player", "source-audit.json");
+  const auditPath = fs.existsSync(bundledAuditPath)
+    ? bundledAuditPath
+    : path.join(appRoot, "soundcloud-local-audit.json");
   const remoteById = new Map();
   try {
     const audit = JSON.parse(await fsp.readFile(auditPath, "utf8"));
-    for (const item of audit.records || [])
+    for (const item of audit.records || []) {
+      remoteById.set(item.soundcloudId, item);
+      const localMatch = tracks.find(
+        (track) =>
+          (item.localTrackId && track.id === item.localTrackId) ||
+          (normalizeTitle(track.title) === normalizeTitle(item.title) &&
+            Math.abs(durationSeconds(track.duration) - item.durationSeconds) <= 5),
+      );
+      if (localMatch) {
+        localMatch.soundcloudUrl = item.soundcloudUrl;
+        localMatch.soundcloudId = item.soundcloudId;
+        localMatch.platforms = {
+          ...(localMatch.platforms || {}),
+          soundcloud: { available: true, url: item.soundcloudUrl },
+        };
+        localMatch.evidence = [
+          ...(localMatch.evidence || []),
+          item.soundcloudUrl,
+        ];
+        continue;
+      }
       if (item.localStatus === "recoverable") {
-        remoteById.set(item.soundcloudId, item);
         const canStream = Boolean(process.env.SOUNDCLOUD_STREAM_API);
         const preferredSource = item.sunoCandidates?.length
           ? "suno"
@@ -128,8 +219,93 @@ async function createCatalog(root, appRoot, origin) {
           evidence: item.evidence,
           warnings: item.warnings,
           fallbackReason: item.fallbackReason,
+          soundcloudUrl: item.soundcloudUrl,
+          soundcloudId: item.soundcloudId,
+          platforms: {
+            local: { available: false },
+            suno: { available: Boolean(item.sunoCandidates?.length) },
+            soundcloud: { available: true, url: item.soundcloudUrl },
+          },
         });
       }
+    }
+  } catch {}
+  try {
+    const enrichedPath = path.join(appRoot, "suno-library-enriched.json");
+    const enriched = JSON.parse(await fsp.readFile(enrichedPath, "utf8"));
+    const byTitle = new Map();
+    for (const track of tracks) {
+      const key = normalizeTitle(track.title);
+      if (key) byTitle.set(key, [...(byTitle.get(key) || []), track]);
+    }
+    for (const item of enriched.tracks || []) {
+      const seconds = Number(item.durationSeconds) || durationSeconds(item.duration);
+      const matches = (byTitle.get(normalizeTitle(item.title)) || []).filter(
+        (track) => !track.platforms?.suno?.available,
+      );
+      const existing = matches
+        .map((track) => ({
+          track,
+          delta: Math.abs(durationSeconds(track.duration) - seconds),
+        }))
+        .filter(({ delta }) => delta <= 5)
+        .sort((a, b) => a.delta - b.delta)[0]?.track;
+      const sunoPlatform = {
+        available: true,
+        id: item.id,
+        url: item.url,
+        audioUrl: item.audioUrl,
+        format: "mp3-stream",
+      };
+      if (existing) {
+        existing.platforms = {
+          ...(existing.platforms || {}),
+          suno: sunoPlatform,
+        };
+        existing.sunoId = item.id;
+        existing.sunoUrl = item.url;
+        existing.cover ||= item.artworkLarge || item.artwork || null;
+        if (!existing.hasLyrics && item.lyrics) {
+          existing.lyrics = item.lyrics;
+          existing.hasLyrics = true;
+        }
+        continue;
+      }
+      const track = {
+        id: `suno-${item.id}`,
+        title: item.title || "Untitled",
+        artist: "Iyari Gomez",
+        file: item.audioUrl || "",
+        streamUrl: item.audioUrl || null,
+        sourceUrl: item.url,
+        duration: `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`,
+        tag: "Sólo en Suno",
+        cover: item.artworkLarge || item.artwork || null,
+        panoramicCover: item.artworkLarge || null,
+        lyrics: item.lyrics || "",
+        hasLyrics: Boolean(item.lyrics),
+        localStatus: "recoverable",
+        localFormat: null,
+        source: "suno",
+        availabilityStatus: item.audioUrl ? "stream" : "recoverable",
+        preferredSource: "suno",
+        preferredAction: "download_wav_from_suno",
+        sunoId: item.id,
+        sunoUrl: item.url,
+        confidence: item.confidence ?? 0.98,
+        evidence: item.evidence || [item.url],
+        warnings: item.warnings || [],
+        fallbackReason: item.fallbackReason ?? null,
+        platforms: {
+          local: { available: false },
+          suno: sunoPlatform,
+          soundcloud: { available: false },
+        },
+      };
+      tracks.push(track);
+      const key = normalizeTitle(track.title);
+      if (key) byTitle.set(key, [...(byTitle.get(key) || []), track]);
+    }
   } catch {}
   return {
     tracks,
@@ -174,11 +350,69 @@ function streamFile(req, res, file, extraHeaders = {}) {
   }
 }
 
-async function startMediaServer(appRoot) {
+async function startMediaServer(appRoot, options = {}) {
   let catalog;
+  let publicCatalog;
+  let detailsById;
+  const storageRoot = options.storageRoot || path.join(appRoot, ".bmmp-data");
+  const ratingsPath = path.join(storageRoot, "ratings.json");
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
-    if (url.pathname === "/player/library.json") return json(res, 200, catalog);
+    if (url.pathname === "/api/profile/ratings" && req.method === "GET") {
+      try {
+        const stored = JSON.parse(await fsp.readFile(ratingsPath, "utf8"));
+        const ratings = sanitizeRatings(stored.ratings);
+        return json(res, 200, {
+          ratings,
+          confidence: 1,
+          evidence: [ratingsPath],
+          warnings: [],
+          fallbackReason: null,
+        });
+      } catch (error) {
+        return json(res, 200, {
+          ratings: {},
+          confidence: error?.code === "ENOENT" ? 1 : 0.5,
+          evidence: [],
+          warnings: error?.code === "ENOENT" ? [] : ["No se pudo leer el archivo de calificaciones"],
+          fallbackReason: error?.code === "ENOENT" ? null : String(error.message || error),
+        });
+      }
+    }
+    if (url.pathname === "/api/profile/ratings" && req.method === "PUT") {
+      try {
+        const body = await readJsonBody(req);
+        const ratings = sanitizeRatings(body.ratings);
+        await fsp.mkdir(storageRoot, { recursive: true });
+        const temporaryPath = `${ratingsPath}.tmp`;
+        await fsp.writeFile(temporaryPath, `${JSON.stringify({ ratings, updatedAt: new Date().toISOString() }, null, 2)}\n`);
+        await fsp.rename(temporaryPath, ratingsPath);
+        return json(res, 200, {
+          ratings,
+          confidence: 1,
+          evidence: [ratingsPath],
+          warnings: [],
+          fallbackReason: null,
+        });
+      } catch (error) {
+        return json(res, 400, {
+          error: "ratings_not_saved",
+          confidence: 0,
+          evidence: [],
+          warnings: ["No se pudieron guardar las calificaciones"],
+          fallbackReason: String(error.message || error),
+        });
+      }
+    }
+    if (url.pathname === "/player/library.json") return json(res, 200, publicCatalog);
+    const details = url.pathname.match(/^\/api\/tracks\/([^/]+)\/details$/);
+    if (details) {
+      const id = safeId(decodeURIComponent(details[1]));
+      const body = id && detailsById.get(id);
+      return body
+        ? json(res, 200, body)
+        : json(res, 404, { error: "track_details_not_found" });
+    }
     const media = url.pathname.match(/^\/api\/(media|cover)\/([^/]+)$/);
     if (media) {
       const id = safeId(media[2]);
@@ -225,6 +459,30 @@ async function startMediaServer(appRoot) {
       }
       return res.end();
     }
+    if (url.pathname === "/api/suno-library") {
+      try {
+        const enrichedPath = path.join(appRoot, "suno-library-enriched.json");
+        const sunoPath = fs.existsSync(enrichedPath)
+          ? enrichedPath
+          : path.join(appRoot, "suno-library.json");
+        const raw = JSON.parse(await fsp.readFile(sunoPath, "utf8"));
+        const tracks = (raw.tracks || []).map((t) => ({
+          id: t.id,
+          title: t.title,
+          duration: t.duration || (t.durationSeconds ? `${Math.floor(t.durationSeconds / 60)}:${String(Math.floor(t.durationSeconds % 60)).padStart(2, "0")}` : "0:00"),
+          artwork: t.artworkLarge || t.artwork,
+          url: t.url,
+          audioUrl: t.audioUrl || null,
+          version: t.model || t.version,
+          page: t.page,
+          lyricsStatus: t.lyricsStatus || "not_exposed",
+          isPublic: t.isPublic ?? null,
+        }));
+        return json(res, 200, { tracks, total: tracks.length, account: raw.account, capturedAt: raw.capturedAt });
+      } catch {
+        return json(res, 404, { error: "suno_library_not_found" });
+      }
+    }
     let filePath = path.join(
       appRoot,
       "dist",
@@ -251,10 +509,23 @@ async function startMediaServer(appRoot) {
       }
     }
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const preferredPort = Number(process.env.BLACKMAMBA_PLAYER_PORT) || 17892;
+  await new Promise((resolve, reject) => {
+    const onError = (error) => {
+      if (error.code !== "EADDRINUSE") return reject(error);
+      server.off("error", onError);
+      server.listen(0, "127.0.0.1", resolve);
+    };
+    server.once("error", onError);
+    server.listen(preferredPort, "127.0.0.1", () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
   const port = server.address().port,
     origin = `http://127.0.0.1:${port}`;
   catalog = await createCatalog(await findLibraryRoot(), appRoot, origin);
+  ({ publicCatalog, detailsById } = splitCatalog(catalog));
   return {
     server,
     origin,
@@ -267,4 +538,4 @@ async function startMediaServer(appRoot) {
     },
   };
 }
-module.exports = { startMediaServer, findLibraryRoot };
+module.exports = { startMediaServer, findLibraryRoot, splitCatalog };

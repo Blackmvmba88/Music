@@ -11,8 +11,16 @@ import { SkipBack } from "@phosphor-icons/react/SkipBack";
 import { SkipForward } from "@phosphor-icons/react/SkipForward";
 import { Shuffle } from "@phosphor-icons/react/Shuffle";
 import { DownloadSimple } from "@phosphor-icons/react/DownloadSimple";
+import { Lock } from "@phosphor-icons/react/Lock";
+import { LockOpen } from "@phosphor-icons/react/LockOpen";
+import { PencilSimple } from "@phosphor-icons/react/PencilSimple";
+import { Gear } from "@phosphor-icons/react/Gear";
+import { Palette } from "@phosphor-icons/react/Palette";
+import { ArrowUp } from "@phosphor-icons/react/ArrowUp";
+import { ArrowDown } from "@phosphor-icons/react/ArrowDown";
 import { AudioVisualizer } from "./AudioVisualizer";
-import { loadCatalog } from "../api/catalog";
+import { SyncLyricsViewer } from "./SyncLyricsViewer";
+import { loadCatalog, loadRatings, loadTrackDetails, persistRatings } from "../api/catalog";
 
 type Track = {
   id?: string;
@@ -68,8 +76,38 @@ type Track = {
   ownership?: { status?: ReviewStatus } | null;
   soundcloudUrl?: string | null;
   soundcloudId?: string | null;
+  sunoId?: string | null;
+  sunoUrl?: string | null;
+  platforms?: {
+    local?: { available: boolean; format?: string | null };
+    suno?: { available: boolean; id?: string; url?: string; audioUrl?: string | null; format?: string };
+    soundcloud?: { available: boolean; url?: string };
+    [platform: string]: { available: boolean; url?: string; [key: string]: unknown } | undefined;
+  };
 };
 type ReviewStatus = "belongs" | "reject" | "later";
+type SourceFilter =
+  | "all"
+  | "only-suno"
+  | "only-soundcloud"
+  | "only-local"
+  | "multiplatform"
+  | "missing-wav"
+  | "missing-cover"
+  | "missing-lyrics";
+interface SunoTrack {
+  id: string;
+  title: string;
+  duration: string;
+  artwork: string;
+  url: string;
+  version: string;
+  page: number;
+  lyrics?: string;
+  audioUrl?: string | null;
+  lyricsStatus?: "available" | "instrumental" | "not_exposed";
+  isPublic?: boolean | null;
+}
 type LayoutMode = "combined" | "grid" | "review" | "focus" | "winamp";
 type MotionMode = "full" | "reduced" | "off";
 type SortMode = "catalog" | "rating-desc" | "rating-asc" | "title-asc" | "title-desc" | "plays-desc" | "plays-asc" | "genre-asc" | "genre-desc";
@@ -155,12 +193,7 @@ const themes = [
     surface: "#211327",
     glow: "#ff48e1",
   },
-  {
-    accent: "#ff7a36",
-    accent2: "#ffd447",
-    surface: "#241710",
-    glow: "#ff9e3d",
-  },
+
   {
     accent: "#35b8ff",
     accent2: "#6f72ff",
@@ -316,12 +349,24 @@ export function App() {
   const themeReady = useRef(false);
   const [current, setCurrent] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [visualizerColor, setVisualizerColor] = useState('orange');
+  const [visualizerBarCount, setVisualizerBarCount] = useState(36);
+  const [visualizerSmoothing, setVisualizerSmoothing] = useState(0.8);
+  const [showVisualizerSettings, setShowVisualizerSettings] = useState(false);
+  const [showThemeSettings, setShowThemeSettings] = useState(false);
+  const [showPersonalization, setShowPersonalization] = useState(false);
+  const [customTheme, setCustomTheme] = useState({ accent: '#ff0000', surface: '#222222', accent2: '#00ff00', glow: '#ff0000' });
+  const [audioAnalyser, setAudioAnalyser] = useState<AnalyserNode | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
   const [shuffle, setShuffle] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const [volume, setVolume] = useState(0.8);
+  const [playbackLocked, setPlaybackLocked] = useState(false);
+  const [renamingTrack, setRenamingTrack] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [tracks, setTracks] = useState<Track[]>(initialTracks);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [loading, setLoading] = useState(true);
@@ -329,6 +374,7 @@ export function App() {
     "all" | "pending" | ReviewStatus
   >("all");
   const [sortMode, setSortMode] = useState<SortMode>("catalog");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [openLyrics, setOpenLyrics] = useState<string | null>(null);
   const [editingTrack, setEditingTrack] = useState<Track | null>(null);
   const [editDraft, setEditDraft] = useState<Partial<Track>>({});
@@ -337,6 +383,16 @@ export function App() {
   const [motion, setMotion] = useState<MotionMode>("full");
   const [downloadingTrack, setDownloadingTrack] = useState<Record<string, number>>({});
   const [visibleCount, setVisibleCount] = useState(60);
+  const [buttonStyle, setButtonStyle] = useState<"led" | "standard">("led");
+  const [globalThemeMode, setGlobalThemeMode] = useState<"auto" | "custom" | VisualPreset>("auto");
+  const [librarySection, setLibrarySection] = useState<"library" | "suno">("library");
+  const [sunoTracks, setSunoTracks] = useState<SunoTrack[]>([]);
+  const [sunoQuery, setSunoQuery] = useState("");
+  const deferredSunoQuery = useDeferredValue(sunoQuery);
+  const [sunoVisibleCount, setSunoVisibleCount] = useState(100);
+  const [sunoLoading, setSunoLoading] = useState(false);
+  const [sunoLoaded, setSunoLoaded] = useState(false);
+  const [loadingDetails, setLoadingDetails] = useState<Record<string, boolean>>({});
   const [reviews, setReviews] = useState<Record<string, ReviewStatus>>(() => {
     try {
       return JSON.parse(
@@ -347,6 +403,7 @@ export function App() {
     }
   });
   const [ratings, setRatings] = useState<Record<string, number>>(() => loadProfile().ratings);
+  const [ratingsReady, setRatingsReady] = useState(false);
   const [playbackHistory, setPlaybackHistory] = useState<
     PlaybackHistoryEntry[]
   >(() => {
@@ -368,20 +425,59 @@ export function App() {
     return counts;
   }, [playbackHistory]);
 
+  const searchIndex = useMemo(() => {
+    const index = new Map<string, string>();
+    for (const item of tracks) {
+      index.set(
+        trackKey(item),
+        normalizeSearch(
+          `${item.title} ${item.artist} ${item.file} ${item.sourceUrl ?? ""} ${(item.hashtags ?? []).join(" ")} ${item.albumTitle ?? ""} ${item.composer ?? ""} ${item.isrc ?? ""}`,
+        ),
+      );
+    }
+    return index;
+  }, [tracks]);
+  const normalizedQuery = useMemo(
+    () => normalizeSearch(deferredQuery),
+    [deferredQuery],
+  );
+  const filteredSunoTracks = useMemo(() => {
+    const needle = normalizeSearch(deferredSunoQuery);
+    if (!needle) return sunoTracks;
+    return sunoTracks.filter((item) =>
+      normalizeSearch(`${item.title} ${item.version}`).includes(needle),
+    );
+  }, [deferredSunoQuery, sunoTracks]);
+
   const filtered = useMemo(() => {
+    const matchesSourceFilter = (item: Track) => {
+      const local = Boolean(item.platforms?.local?.available);
+      const suno = Boolean(item.platforms?.suno?.available);
+      const soundcloud = Boolean(item.platforms?.soundcloud?.available);
+      const platformCount = [local, suno, soundcloud].filter(Boolean).length;
+      if (sourceFilter === "only-suno") return suno && !local && !soundcloud;
+      if (sourceFilter === "only-soundcloud") return soundcloud && !local && !suno;
+      if (sourceFilter === "only-local") return local && !suno && !soundcloud;
+      if (sourceFilter === "multiplatform") return platformCount > 1;
+      if (sourceFilter === "missing-wav")
+        return !local || item.localFormat !== "wav";
+      if (sourceFilter === "missing-cover") return !item.cover;
+      if (sourceFilter === "missing-lyrics") return !item.hasLyrics;
+      return true;
+    };
     const matchingTracks = tracks.filter((item) => {
-      const matchesQuery = normalizeSearch(
-        `${item.title} ${item.artist} ${item.file} ${item.sourceUrl ?? ""} ${(item.hashtags ?? []).join(" ")} ${item.description ?? ""} ${item.albumTitle ?? ""} ${item.composer ?? ""} ${item.isrc ?? ""} ${item.lyrics ?? ""}`,
-      ).includes(normalizeSearch(deferredQuery));
+      const matchesQuery = (searchIndex.get(trackKey(item)) || "").includes(
+        normalizedQuery,
+      );
       const status = reviews[trackKey(item)];
       return (
         matchesQuery &&
+        matchesSourceFilter(item) &&
         (reviewFilter === "all" ||
           (reviewFilter === "pending" ? !status : status === reviewFilter))
       );
     });
-    if (sortMode === "catalog") return matchingTracks;
-    return matchingTracks
+    const sortedTracks = sortMode === "catalog" ? matchingTracks : matchingTracks
       .map((item, index) => ({ item, index }))
       .sort((left, right) => {
         if (sortMode === "title-asc" || sortMode === "title-desc") {
@@ -408,18 +504,33 @@ export function App() {
         return sortMode === "rating-desc" ? -difference : difference;
       })
       .map(({ item }) => item);
-  }, [deferredQuery, sortMode, ratings, reviewFilter, reviews, tracks, playCounts]);
+    const activeTrack = tracks[current];
+    return activeTrack && !sortedTracks.includes(activeTrack)
+      ? [activeTrack, ...sortedTracks]
+      : sortedTracks;
+  }, [current, normalizedQuery, playCounts, ratings, reviewFilter, reviews, searchIndex, sortMode, sourceFilter, tracks]);
   const visibleTracks = filtered.slice(0, visibleCount);
   const track = tracks[current];
-  const visualTheme = track?.visualTheme;
-  const theme = visualTheme
-    ? {
-        accent: visualTheme.accentA,
-        accent2: visualTheme.accentB,
-        surface: "#17101d",
-        glow: visualTheme.glow,
-      }
-    : themes[themeIndex];
+  
+  // Theme resolution
+  let theme: { accent: string; accent2: string; surface: string; glow: string };
+  let activeVisualTheme: VisualTheme | undefined;
+  if (globalThemeMode === "custom") {
+    theme = customTheme;
+  } else {
+    activeVisualTheme = track?.visualTheme;
+    if (globalThemeMode !== "auto") {
+      activeVisualTheme = VISUAL_PRESETS[globalThemeMode as VisualPreset];
+    }
+    theme = activeVisualTheme
+      ? {
+          accent: activeVisualTheme.accentA,
+          accent2: activeVisualTheme.accentB,
+          surface: "#17101d",
+          glow: activeVisualTheme.glow,
+        }
+      : themes[themeIndex];
+  }
   const counts = useMemo(
     () =>
       tracks.reduce(
@@ -431,6 +542,35 @@ export function App() {
         { belongs: 0, reject: 0, later: 0, pending: 0 },
       ),
     [reviews, tracks],
+  );
+  const sourceCounts = useMemo(
+    () =>
+      tracks.reduce(
+        (totals, item) => {
+          const local = Boolean(item.platforms?.local?.available);
+          const suno = Boolean(item.platforms?.suno?.available);
+          const soundcloud = Boolean(item.platforms?.soundcloud?.available);
+          const platformCount = [local, suno, soundcloud].filter(Boolean).length;
+          if (suno && !local && !soundcloud) totals.onlySuno += 1;
+          if (soundcloud && !local && !suno) totals.onlySoundcloud += 1;
+          if (local && !suno && !soundcloud) totals.onlyLocal += 1;
+          if (platformCount > 1) totals.multiplatform += 1;
+          if (!local || item.localFormat !== "wav") totals.missingWav += 1;
+          if (!item.cover) totals.missingCover += 1;
+          if (!item.hasLyrics) totals.missingLyrics += 1;
+          return totals;
+        },
+        {
+          onlySuno: 0,
+          onlySoundcloud: 0,
+          onlyLocal: 0,
+          multiplatform: 0,
+          missingWav: 0,
+          missingCover: 0,
+          missingLyrics: 0,
+        },
+      ),
+    [tracks],
   );
 
   useEffect(() => {
@@ -459,16 +599,26 @@ export function App() {
           if (featuredIndex >= 0) setCurrent(featuredIndex);
           setReviews((currentReviews) => {
             const next = { ...currentReviews };
-            for (const item of library.tracks as Track[])
-              if (item.ownership?.status === "belongs" && !next[trackKey(item)])
+            for (const item of library.tracks as Track[]) {
+              if (item.id && item.file && next[item.file] && !next[item.id]) {
+                next[item.id] = next[item.file];
+              }
+              if (item.ownership?.status === "belongs" && !next[trackKey(item)]) {
                 next[trackKey(item)] = "belongs";
+              }
+            }
             return next;
           });
           setRatings((currentRatings) => {
             const next = { ...currentRatings };
-            for (const item of library.tracks as Track[])
-              if (item.rating && !next[trackKey(item)])
+            for (const item of library.tracks as Track[]) {
+              if (item.id && item.file && next[item.file] !== undefined && next[item.id] === undefined) {
+                next[item.id] = next[item.file];
+              }
+              if (item.rating && !next[trackKey(item)]) {
                 next[trackKey(item)] = item.rating;
+              }
+            }
             return next;
           });
         }
@@ -491,8 +641,57 @@ export function App() {
     );
   }, [playbackHistory]);
   useEffect(() => {
+    const controller = new AbortController();
+    loadRatings(controller.signal)
+      .then((storedRatings) => {
+        setRatings((localRatings) => ({ ...storedRatings, ...localRatings }));
+        setRatingsReady(true);
+      })
+      .catch(() => setRatingsReady(true));
+    return () => controller.abort();
+  }, []);
+  useEffect(() => {
+    if (!ratingsReady) return;
     saveRatings(ratings);
-  }, [ratings]);
+    const timer = window.setTimeout(() => {
+      void persistRatings(ratings).catch(() => undefined);
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [ratings, ratingsReady]);
+  useEffect(() => {
+    if (librarySection !== "suno" || sunoLoaded || sunoLoading) return;
+    setSunoLoading(true);
+    fetch("/api/suno-library")
+      .then((r) => r.json())
+      .then((data) => {
+        setSunoTracks(data.tracks || []);
+        setSunoLoaded(true);
+      })
+      .catch(() => setSunoTracks([]))
+      .finally(() => setSunoLoading(false));
+  }, [librarySection, sunoLoaded, sunoLoading]);
+  useEffect(() => {
+    setSunoVisibleCount(100);
+  }, [deferredSunoQuery]);
+  useEffect(() => {
+    if (playing && !audioCtxRef.current && audio.current) {
+      try {
+        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+        const ctx = new AudioContext();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 1024;
+        analyser.smoothingTimeConstant = visualizerSmoothing;
+        
+        const source = ctx.createMediaElementSource(audio.current);
+        source.connect(analyser);
+        analyser.connect(ctx.destination);
+        audioCtxRef.current = ctx;
+        setAudioAnalyser(analyser);
+      } catch (err) {
+        console.warn("Could not initialize AudioContext", err);
+      }
+    }
+  }, [playing]);
   useEffect(() => {
     if (!themeReady.current) {
       themeReady.current = true;
@@ -506,16 +705,15 @@ export function App() {
   }, [current]);
   useEffect(() => {
     const timer = window.setInterval(
-      () =>
-        setThemeIndex(
-          (index) =>
-            (index + 1 + Math.floor(Math.random() * (themes.length - 1))) %
-            themes.length,
-        ),
-      24000,
+      () => {
+        if (globalThemeMode === "auto") {
+          setThemeIndex((current) => (current + 1) % themes.length);
+        }
+      },
+      8000,
     );
     return () => window.clearInterval(timer);
-  }, []);
+  }, [globalThemeMode]);
   useEffect(() => {
     if (!audio.current) return;
     audio.current.load();
@@ -542,6 +740,12 @@ export function App() {
     return () => cancelAnimationFrame(frame);
   }, [current, filtered, tracks]);
 
+  useEffect(() => {
+    if (audioAnalyser) {
+      audioAnalyser.smoothingTimeConstant = visualizerSmoothing;
+    }
+  }, [visualizerSmoothing, audioAnalyser]);
+
   const toggle = () => {
     if (!audio.current) return;
     if (audio.current.paused) {
@@ -553,24 +757,28 @@ export function App() {
     }
   };
   const playTrack = (selected: Track) => {
+    if (playbackLocked && tracks[current] !== selected) return;
     if (
       (!selected.file && !selected.streamUrl) ||
       (selected.localStatus === "recoverable" && !selected.streamUrl)
     )
       return;
     const index = tracks.indexOf(selected);
-    if (index === current) toggle();
-    else {
-      recordPlayback(selected);
-      flushSync(() => {
-        setCurrent(index);
-        setPlaying(true);
-      });
-      audio.current?.load();
-      audio.current?.play().catch(() => setPlaying(false));
+    if (index === current) {
+      if (!playing) toggle();
+      return;
     }
+    
+    recordPlayback(selected);
+    flushSync(() => {
+      setCurrent(index);
+      setPlaying(true);
+    });
+    audio.current?.load();
+    audio.current?.play().catch(() => setPlaying(false));
   };
-  const move = (amount: number) =>
+  const move = (amount: number) => {
+    if (playbackLocked) return;
     setCurrent((index) => {
       if (shuffle && amount > 0 && tracks.length > 1) {
         let next = index;
@@ -579,6 +787,7 @@ export function App() {
       }
       return (index + amount + tracks.length) % tracks.length;
     });
+  };
   const seek = (amount: number) => {
     if (!audio.current) return;
     const nextTime = Math.max(
@@ -622,7 +831,26 @@ export function App() {
       ...currentReviews,
       [trackKey(item)]: status,
     }));
-  const openTrackEditor = (item: Track) => {
+  const ensureTrackDetails = async (item: Track) => {
+    const key = trackKey(item);
+    if (!item.id || item.lyrics !== undefined || loadingDetails[key]) return item;
+    setLoadingDetails((state) => ({ ...state, [key]: true }));
+    try {
+      const details = await loadTrackDetails<Partial<Track>>(item.id);
+      const hydrated = { ...item, ...details };
+      setTracks((items) =>
+        items.map((candidate) => trackKey(candidate) === key ? hydrated : candidate),
+      );
+      return hydrated;
+    } catch {
+      return item;
+    } finally {
+      setLoadingDetails((state) => ({ ...state, [key]: false }));
+    }
+  };
+  const openTrackEditor = async (item: Track) => {
+    const hydratedItem = await ensureTrackDetails(item);
+    item = hydratedItem;
     setEditingTrack(item);
     setEditDraft({
       title: item.title,
@@ -706,6 +934,29 @@ export function App() {
       JSON.stringify({ ...stored, [key]: normalizedDraft }),
     );
     setEditingTrack(null);
+  };
+  const saveRename = (track: Track) => {
+    if (!renamingTrack || !renameDraft.trim()) {
+      setRenamingTrack(null);
+      return;
+    }
+    const key = trackKey(track);
+    setTracks((currentTracks) =>
+      currentTracks.map((item) =>
+        trackKey(item) === key
+          ? { ...item, title: renameDraft.trim() }
+          : item
+      )
+    );
+    let stored: Record<string, Partial<Track>> = {};
+    try {
+      stored = JSON.parse(localStorage.getItem("blackmamba-track-metadata") ?? "{}");
+    } catch {
+      stored = {};
+    }
+    stored[key] = { ...(stored[key] ?? {}), title: renameDraft.trim() };
+    localStorage.setItem("blackmamba-track-metadata", JSON.stringify(stored));
+    setRenamingTrack(null);
   };
   const initials = (item: Track) =>
     item.title
@@ -822,7 +1073,9 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.target instanceof HTMLInputElement) return;
+      const target = event.target as HTMLElement;
+      if (["INPUT", "TEXTAREA"].includes(target.tagName) || target.isContentEditable) return;
+      
       if (event.code === "Space") {
         event.preventDefault();
         toggle();
@@ -851,18 +1104,18 @@ export function App() {
 
   return (
     <main
-      className={`dynamic-theme layout-${layout} motion-${motion}`}
+      className={`dynamic-theme layout-${layout} motion-${motion} button-style-${buttonStyle}`}
       style={
         {
           "--acid": theme.accent,
           "--accent-2": theme.accent2,
           "--theme-surface": theme.surface,
           "--theme-glow": theme.glow,
-          "--theme-accent-c": visualTheme?.accentC ?? theme.accent2,
-          "--theme-panel-glow": visualTheme?.panelGlow ?? theme.glow,
-          "--theme-disc-glow": visualTheme?.discGlow ?? theme.glow,
-          "--theme-button-glow": visualTheme?.buttonGlow ?? theme.accent,
-          "--theme-speed": `${(visualTheme?.speed ?? 6) * 3}s`,
+          "--theme-accent-c": activeVisualTheme?.accentC ?? theme.accent2,
+          "--theme-panel-glow": activeVisualTheme?.panelGlow ?? theme.glow,
+          "--theme-disc-glow": activeVisualTheme?.discGlow ?? theme.glow,
+          "--theme-button-glow": activeVisualTheme?.buttonGlow ?? theme.accent,
+          "--theme-speed": `${(activeVisualTheme?.speed ?? 6) * 3}s`,
         } as React.CSSProperties
       }
     >
@@ -876,6 +1129,7 @@ export function App() {
         </a>
         <div className="nav-links">
           <a href="#music">Música</a>
+          <a className="school-link" href="/school">Escuela de Música</a>
           <a href="#about">Nosotros</a>
         </div>
         <a className="pill" href="#music">
@@ -961,6 +1215,135 @@ export function App() {
               Winamp Classic
             </button>
           </div>
+          
+          <button
+            className={`layout-button ${showPersonalization ? "active" : ""}`}
+            onClick={() => setShowPersonalization(!showPersonalization)}
+            aria-label="Mostrar opciones de personalización"
+            style={{ marginLeft: 16 }}
+          >
+            <Palette size={17} />
+            Personalizar
+          </button>
+          
+          {showPersonalization && (
+            <div className="personalization-switcher" aria-label="Personalización">
+              <span className="eyebrow" style={{ marginRight: 8 }}>BOTONES:</span>
+            <button
+              className={buttonStyle === "led" ? "active" : ""}
+              onClick={() => setButtonStyle("led")}
+            >LED</button>
+            <button
+              className={buttonStyle === "standard" ? "active" : ""}
+              onClick={() => setButtonStyle("standard")}
+            >Estándar</button>
+
+            <span className="eyebrow" style={{ marginLeft: 16, marginRight: 8 }}>TEMA GLOBAL:</span>
+            <button
+              className={globalThemeMode === "auto" ? "active" : ""}
+              onClick={() => setGlobalThemeMode("auto")}
+            >Auto</button>
+            <button
+              className={globalThemeMode === "custom" ? "active" : ""}
+              onClick={() => {
+                setGlobalThemeMode("custom");
+                setShowThemeSettings(true);
+              }}
+            >Custom</button>
+            {(Object.keys(VISUAL_PRESETS) as VisualPreset[]).map(preset => (
+              <button
+                key={preset}
+                className={globalThemeMode === preset ? "active" : ""}
+                onClick={() => setGlobalThemeMode(preset)}
+              >
+                {preset}
+              </button>
+            ))}
+
+            <button 
+              style={{ marginLeft: 16 }}
+              className={showVisualizerSettings ? "active" : ""}
+              onClick={() => setShowVisualizerSettings(!showVisualizerSettings)}
+              aria-label="Configuración de Visualizador"
+            >
+              <Gear size={16} />
+            </button>
+            
+            <button 
+              style={{ marginLeft: 8 }}
+              className={showThemeSettings ? "active" : ""}
+              onClick={() => setShowThemeSettings(!showThemeSettings)}
+              aria-label="Editor de Tema"
+            >
+              <Palette size={16} />
+            </button>
+            
+            {showVisualizerSettings && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px', background: 'rgba(0,0,0,0.2)', borderRadius: '4px' }}>
+                <span className="eyebrow">VISUALIZADOR:</span>
+                <button
+                  className={visualizerColor === "purple" ? "active" : ""}
+                  onClick={() => setVisualizerColor("purple")}
+                >Morado</button>
+                <button
+                  className={visualizerColor === "blue" ? "active" : ""}
+                  onClick={() => setVisualizerColor("blue")}
+                >Azul</button>
+                
+                <span className="eyebrow" style={{ marginLeft: '12px' }}>LÍNEAS: {visualizerBarCount}</span>
+                <input 
+                  type="range" 
+                  min="16" 
+                  max="128" 
+                  step="2" 
+                  value={visualizerBarCount} 
+                  onChange={(e) => setVisualizerBarCount(Number(e.target.value))} 
+                  style={{ width: '80px' }}
+                />
+
+                <span className="eyebrow" style={{ marginLeft: '12px' }}>SENS: {visualizerSmoothing.toFixed(2)}</span>
+                <input 
+                  type="range" 
+                  min="0.1" 
+                  max="0.95" 
+                  step="0.05" 
+                  value={visualizerSmoothing} 
+                  onChange={(e) => setVisualizerSmoothing(Number(e.target.value))} 
+                  style={{ width: '80px' }}
+                />
+              </div>
+            )}
+
+            {showThemeSettings && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px', background: 'rgba(0,0,0,0.2)', borderRadius: '4px' }}>
+                <span className="eyebrow">EDITOR TEMA:</span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', textTransform: 'uppercase' }}>
+                  Acento
+                  <input 
+                    type="color" 
+                    value={customTheme.accent} 
+                    onChange={(e) => {
+                      setCustomTheme(prev => ({ ...prev, accent: e.target.value, glow: e.target.value }));
+                      setGlobalThemeMode("custom");
+                    }} 
+                  />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', textTransform: 'uppercase' }}>
+                  Fondo
+                  <input 
+                    type="color" 
+                    value={customTheme.surface} 
+                    onChange={(e) => {
+                      setCustomTheme(prev => ({ ...prev, surface: e.target.value }));
+                      setGlobalThemeMode("custom");
+                    }} 
+                  />
+                </label>
+              </div>
+            )}
+            </div>
+          )}
+
           <label>
             Buscar canciones
             <input
@@ -976,58 +1359,143 @@ export function App() {
         </div>
         <div className="library-workspace">
           <aside className="library-sidebar">
-            <span className="eyebrow">BIBLIOTECA</span>
-            <button onClick={() => setReviewFilter("all")}>
-              Todas <b>{tracks.length}</b>
+            <a className="school-entry" href="/school">
+              <span aria-hidden="true">♬</span>
+              <span>Escuela de Música<small>Entrenamiento y guitarra</small></span>
+              <b>→</b>
+            </a>
+            <span className="eyebrow">FUENTES</span>
+            <button
+              className={librarySection === "library" ? "active" : ""}
+              onClick={() => setLibrarySection("library")}
+            >
+              Biblioteca local <b>{tracks.length}</b>
             </button>
-            <button onClick={() => setReviewFilter("pending")}>
-              Por revisar <b>{counts.pending}</b>
+            <button
+              className={`suno-section-btn ${librarySection === "suno" ? "active" : ""}`}
+              onClick={() => setLibrarySection("suno")}
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13" aria-hidden="true">
+                <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
+              </svg>
+              Suno.com
+              {sunoLoaded && <b>{sunoTracks.length}</b>}
             </button>
-            <button onClick={() => setReviewFilter("belongs")}>
-              Aprobadas <b>{counts.belongs}</b>
-            </button>
-            <button onClick={() => setReviewFilter("reject")}>
-              Rechazadas <b>{counts.reject}</b>
-            </button>
-            <button onClick={() => setReviewFilter("later")}>
-              Más tarde <b>{counts.later}</b>
-            </button>
-            <span className="eyebrow side-label">FILTROS</span>
-            <p>Género</p>
-            <p>Duración</p>
-            <p>Calificación</p>
-            <p>Con letra</p>
-            <span className="eyebrow side-label">
-              REPRODUCIDAS RECIENTEMENTE
-            </span>
-            <div className="playback-history">
-              {playbackHistory.slice(0, 8).map((entry) => (
-                <button
-                  key={`${entry.trackKey}-${entry.playedAt}`}
-                  onClick={() => playFromHistory(entry)}
-                  title={new Date(entry.playedAt).toLocaleString()}
-                >
-                  <span>{entry.title}</span>
-                  <small>
-                    {new Date(entry.playedAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </small>
+            {librarySection === "library" && (
+              <>
+                <span className="eyebrow side-label">BIBLIOTECA</span>
+                <button onClick={() => setReviewFilter("all")}>
+                  Todas <b>{tracks.length}</b>
                 </button>
-              ))}
-              {!playbackHistory.length && <p>Aún no hay reproducciones.</p>}
-              {!!playbackHistory.length && (
-                <button
-                  className="clear-history"
-                  onClick={() => setPlaybackHistory([])}
-                >
-                  Limpiar historial
+                <button onClick={() => setReviewFilter("pending")}>
+                  Por revisar <b>{counts.pending}</b>
                 </button>
-              )}
-            </div>
+                <button onClick={() => setReviewFilter("belongs")}>
+                  Aprobadas <b>{counts.belongs}</b>
+                </button>
+                <button onClick={() => setReviewFilter("reject")}>
+                  Rechazadas <b>{counts.reject}</b>
+                </button>
+                <button onClick={() => setReviewFilter("later")}>
+                  Más tarde <b>{counts.later}</b>
+                </button>
+                <span className="eyebrow side-label">
+                  REPRODUCIDAS RECIENTEMENTE
+                </span>
+                <div className="playback-history">
+                  {playbackHistory.slice(0, 8).map((entry) => (
+                    <button
+                      key={`${entry.trackKey}-${entry.playedAt}`}
+                      onClick={() => playFromHistory(entry)}
+                      title={new Date(entry.playedAt).toLocaleString()}
+                    >
+                      <span>{entry.title}</span>
+                      <small>
+                        {new Date(entry.playedAt).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </small>
+                    </button>
+                  ))}
+                  {!playbackHistory.length && <p>Aún no hay reproducciones.</p>}
+                  {!!playbackHistory.length && (
+                    <button
+                      className="clear-history"
+                      onClick={() => setPlaybackHistory([])}
+                    >
+                      Limpiar historial
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </aside>
           <div className="catalog-main">
+            {librarySection === "suno" ? (
+              <div className="suno-panel">
+                <div className="suno-panel-header">
+                  <span className="eyebrow">SUNO.COM · neocyber1</span>
+                  <input
+                    type="search"
+                    className="suno-search"
+                    placeholder="Buscar en Suno…"
+                    value={sunoQuery}
+                    onChange={(e) => setSunoQuery(e.target.value)}
+                  />
+                </div>
+                {sunoLoading && <p className="suno-status">Cargando {sunoTracks.length || "…"} canciones…</p>}
+                {!sunoLoading && sunoLoaded && (
+                  <div className="suno-track-list">
+                    <p className="suno-status">
+                      {filteredSunoTracks.length} resultados · mostrando {Math.min(sunoVisibleCount, filteredSunoTracks.length)}
+                    </p>
+                    {filteredSunoTracks
+                      .slice(0, sunoVisibleCount)
+                      .map((t) => (
+                        <div key={t.id} className="suno-track-row">
+                          {t.artwork && (
+                            <img src={t.artwork} alt="" className="suno-track-art" loading="lazy" />
+                          )}
+                          <div className="suno-track-info">
+                            <strong>{t.title}</strong>
+                            <small>{t.duration} · {t.version}</small>
+                            <span className="platform-badges" aria-label="Disponibilidad por plataforma">
+                              <span className="platform-badge active suno">SUNO</span>
+                              <span className="platform-badge">LOCAL</span>
+                              <span className="platform-badge">SOUNDCLOUD</span>
+                              {t.lyricsStatus === "available" && (
+                                <span className="platform-badge active lyrics">LETRA</span>
+                              )}
+                            </span>
+                          </div>
+                          <a
+                            href={t.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="suno-open-btn"
+                            title="Abrir en Suno"
+                          >
+                            ↗
+                          </a>
+                        </div>
+                      ))}
+                    {sunoVisibleCount < filteredSunoTracks.length && (
+                      <button
+                        className="load-more suno-load-more"
+                        onClick={() => setSunoVisibleCount((count) => count + 100)}
+                      >
+                        Mostrar 100 más · {filteredSunoTracks.length - sunoVisibleCount} restantes
+                      </button>
+                    )}
+                  </div>
+                )}
+                {!sunoLoading && !sunoLoaded && (
+                  <p className="suno-status">Error cargando la biblioteca de Suno.</p>
+                )}
+              </div>
+            ) : (
+              <>
             <div className="review-toolbar" aria-label="Filtros de revisión">
               <label className="rating-sort">
                 <span>Ordenar</span>
@@ -1088,6 +1556,32 @@ export function App() {
                 Exportar decisiones
               </button>
             </div>
+            <div className="source-filter-toolbar" aria-label="Filtros por plataforma y recursos">
+              <button className={sourceFilter === "all" ? "selected" : ""} onClick={() => { setSourceFilter("all"); setVisibleCount(60); }}>
+                Todas las fuentes <b>{tracks.length}</b>
+              </button>
+              <button className={sourceFilter === "only-suno" ? "selected suno" : ""} onClick={() => { setSourceFilter("only-suno"); setVisibleCount(60); }}>
+                Sólo Suno <b>{sourceCounts.onlySuno}</b>
+              </button>
+              <button className={sourceFilter === "only-soundcloud" ? "selected soundcloud" : ""} onClick={() => { setSourceFilter("only-soundcloud"); setVisibleCount(60); }}>
+                Sólo SoundCloud <b>{sourceCounts.onlySoundcloud}</b>
+              </button>
+              <button className={sourceFilter === "only-local" ? "selected local" : ""} onClick={() => { setSourceFilter("only-local"); setVisibleCount(60); }}>
+                Sólo local <b>{sourceCounts.onlyLocal}</b>
+              </button>
+              <button className={sourceFilter === "multiplatform" ? "selected" : ""} onClick={() => { setSourceFilter("multiplatform"); setVisibleCount(60); }}>
+                Multiplataforma <b>{sourceCounts.multiplatform}</b>
+              </button>
+              <button className={sourceFilter === "missing-wav" ? "selected warning" : ""} onClick={() => { setSourceFilter("missing-wav"); setVisibleCount(60); }}>
+                Falta WAV <b>{sourceCounts.missingWav}</b>
+              </button>
+              <button className={sourceFilter === "missing-cover" ? "selected warning" : ""} onClick={() => { setSourceFilter("missing-cover"); setVisibleCount(60); }}>
+                Falta portada <b>{sourceCounts.missingCover}</b>
+              </button>
+              <button className={sourceFilter === "missing-lyrics" ? "selected warning" : ""} onClick={() => { setSourceFilter("missing-lyrics"); setVisibleCount(60); }}>
+                Falta letra <b>{sourceCounts.missingLyrics}</b>
+              </button>
+            </div>
             <div className="track-list">
               {visibleTracks.map((item, visibleIndex) => (
                 <div
@@ -1101,42 +1595,63 @@ export function App() {
                   data-recoverable={item.localStatus === "recoverable" ? "true" : undefined}
                   style={{ animation: `row-in 0.26s ease-out ${Math.min(visibleIndex * 10, 260)}ms both` }}
                 >
-                  <button
-                    className="track-main"
-                    onClick={() => {
-                      playTrack(item);
-                      openTrackEditor(item);
-                    }}
-                  >
+                  <div className="track-main">
                     <span
                       className="track-number"
                       aria-label={`Canción número ${tracks.indexOf(item) + 1}`}
                     >
                       {tracks.indexOf(item) + 1}
                     </span>
-                    <span
+                    <button
                       className="track-art"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        playTrack(item);
+                      }}
                       aria-label={
                         item.cover
-                          ? `Portada de ${item.title}`
-                          : `Portada pendiente de ${item.title}`
+                          ? `Reproducir ${item.title}`
+                          : `Reproducir ${item.title} (sin portada)`
                       }
+                      style={{ cursor: "pointer", padding: 0 }}
                     >
                       {item.cover ? (
                         <img src={item.cover} alt="" />
                       ) : (
                         initials(item)
                       )}
-                    </span>
-                    <span className="row-play">
-                      {item.localStatus === "recoverable"
-                        ? "↪"
-                        : item === track && playing
-                          ? "Ⅱ"
-                          : "▶"}
-                    </span>
+                    </button>
                     <span className="track-title">
-                      <strong>{item.title}</strong>
+                      {renamingTrack === trackKey(item) ? (
+                        <input
+                          autoFocus
+                          value={renameDraft}
+                          onChange={(e) => setRenameDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveRename(item);
+                            if (e.key === "Escape") setRenamingTrack(null);
+                          }}
+                          onBlur={() => saveRename(item)}
+                          className="inline-title-edit"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <span className="title-wrapper">
+                          <strong>{item.title}</strong>
+                          <button
+                            className="inline-edit-btn"
+                            aria-label="Renombrar canción"
+                            title="Renombrar canción"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRenameDraft(item.title);
+                              setRenamingTrack(trackKey(item));
+                            }}
+                          >
+                            <PencilSimple size={12} />
+                          </button>
+                        </span>
+                      )}
                       <small>{item.artist}</small>
                       {!!item.hashtags?.length && (
                         <small className="track-hashtags">
@@ -1155,6 +1670,17 @@ export function App() {
                       >
                         {availabilityLabel(item)}
                       </small>
+                      <span className="platform-badges" aria-label="Disponibilidad por plataforma">
+                        <span className={`platform-badge ${item.platforms?.local?.available ? "active local" : ""}`}>
+                          LOCAL{item.platforms?.local?.format ? ` · ${String(item.platforms.local.format).toUpperCase()}` : ""}
+                        </span>
+                        <span className={`platform-badge ${item.platforms?.suno?.available ? "active suno" : ""}`}>
+                          SUNO
+                        </span>
+                        <span className={`platform-badge ${item.platforms?.soundcloud?.available ? "active soundcloud" : ""}`}>
+                          SOUNDCLOUD
+                        </span>
+                      </span>
                     </span>
                     <span className="tag">
                       {reviews[trackKey(item)] === "belongs"
@@ -1166,7 +1692,7 @@ export function App() {
                             : item.tag}
                     </span>
                     <time>{item.duration}</time>
-                  </button>
+                  </div>
                   <div
                     className="review-actions"
                     aria-label={`Revisar ${item.title}`}
@@ -1198,16 +1724,26 @@ export function App() {
                       ))}
                     </div>
                     <button
+                      className="edit-track-btn"
+                      onClick={() => openTrackEditor(item)}
+                      aria-label={`Editar ${item.title}`}
+                      title={`Editar ${item.title}`}
+                    >
+                      <PencilSimple size={16} />
+                    </button>
+                    <button
                       className="lyrics-toggle"
-                      onClick={() =>
-                        setOpenLyrics(
-                          openLyrics === trackKey(item) ? null : trackKey(item),
-                        )
-                      }
+                      onClick={async () => {
+                        const key = trackKey(item);
+                        if (openLyrics === key) return setOpenLyrics(null);
+                        await ensureTrackDetails(item);
+                        setOpenLyrics(key);
+                      }}
+                      disabled={Boolean(loadingDetails[trackKey(item)])}
                       aria-expanded={openLyrics === trackKey(item)}
                       aria-label={`Letra de ${item.title}`}
                     >
-                      {item.hasLyrics ? "Letra" : "Sin letra"}
+                      {loadingDetails[trackKey(item)] ? "Cargando…" : item.hasLyrics ? "Letra" : "Sin letra"}
                     </button>
                     <button
                       className={
@@ -1243,14 +1779,12 @@ export function App() {
                       aria-label={`Contenido de letra de ${item.title}`}
                     >
                       <span className="eyebrow">LETRA · {item.title}</span>
-                      {item.hasLyrics ? (
-                        <pre>{item.lyrics}</pre>
-                      ) : (
-                        <p>
-                          Letra pendiente. Este espacio ya está reservado para
-                          agregarla.
-                        </p>
-                      )}
+                      <SyncLyricsViewer
+                        trackId={item.id || ""}
+                        currentTime={trackKey(item) === trackKey(track) ? time : 0}
+                        theme={theme}
+                        fallbackLyrics={item.lyrics}
+                      />
                     </section>
                   )}
                 </div>
@@ -1266,6 +1800,8 @@ export function App() {
               >
                 Mostrar 60 más · {filtered.length - visibleCount} restantes
               </button>
+            )}
+            </>
             )}
           </div>
           <aside className="track-inspector">
@@ -1892,10 +2428,28 @@ export function App() {
         </div>
         <AudioVisualizer
           active={playing && motion !== "off"}
-          color={theme.accent}
+          color={visualizerColor}
           reduced={motion === "reduced"}
           type={layout === "winamp" ? "sine" : "bar"}
+          analyser={audioAnalyser || undefined}
+          barCount={visualizerBarCount}
         />
+        <div className="scroll-buttons">
+          <button
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            aria-label="Subir hasta arriba"
+            title="Subir hasta arriba"
+          >
+            <ArrowUp size={24} weight="bold" />
+          </button>
+          <button
+            onClick={() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })}
+            aria-label="Bajar hasta abajo"
+            title="Bajar hasta abajo"
+          >
+            <ArrowDown size={24} weight="bold" />
+          </button>
+        </div>
         <div className="transport">
           <div className="controls">
             <button
@@ -1912,6 +2466,19 @@ export function App() {
               <Shuffle size={16} />
             </button>
             <button
+              className={`lock-control ${playbackLocked ? "active" : ""}`}
+              onClick={() => setPlaybackLocked((l) => !l)}
+              aria-label={
+                playbackLocked
+                  ? "Desbloquear reproducción"
+                  : "Bloquear reproducción"
+              }
+              aria-pressed={playbackLocked}
+              title={playbackLocked ? "Desbloquear reproducción" : "Bloquear reproducción para no cambiar de canción accidentalmente"}
+            >
+              {playbackLocked ? <Lock size={16} weight="fill" color="#ffcc00" /> : <LockOpen size={16} />}
+            </button>
+            <button
               onClick={() => downloadTrack(track)}
               aria-label={downloadLabel(track)}
               title={downloadLabel(track)}
@@ -1919,6 +2486,7 @@ export function App() {
               <DownloadSimple size={18} />
             </button>
             <button
+              className="led-btn skip-btn"
               onClick={() => move(-1)}
               aria-label="Canción anterior"
               title="Canción anterior"
@@ -1926,6 +2494,7 @@ export function App() {
               <SkipBack size={22} weight="bold" />
             </button>
             <button
+              className="led-btn skip-btn"
               onClick={() => seek(-10)}
               aria-label="Retroceder 10 segundos"
               title="Retroceder 10 segundos"
@@ -1933,7 +2502,7 @@ export function App() {
               −10
             </button>
             <button
-              className="main-control"
+              className={`main-control led-btn ${playing ? 'pause-btn' : 'play-btn'}`}
               onClick={toggle}
               aria-label={playing ? "Pausar" : "Reproducir"}
               title={playing ? "Pausar" : "Reproducir"}
@@ -1941,7 +2510,7 @@ export function App() {
               {playing ? <Pause size={16} weight="fill" /> : <Play size={16} weight="fill" />}
             </button>
             <button
-              className="stop-control"
+              className="stop-control led-btn stop-btn"
               onClick={stop}
               aria-label="Detener"
               title="Detener"
@@ -1949,6 +2518,7 @@ export function App() {
               <Stop size={13} weight="fill" />
             </button>
             <button
+              className="led-btn skip-btn"
               onClick={() => seek(10)}
               aria-label="Adelantar 10 segundos"
               title="Adelantar 10 segundos"
@@ -1956,6 +2526,7 @@ export function App() {
               +10
             </button>
             <button
+              className="led-btn skip-btn"
               onClick={() => move(1)}
               aria-label="Canción siguiente"
               title="Canción siguiente"
@@ -1972,6 +2543,7 @@ export function App() {
               max={duration || 0}
               step="0.1"
               value={time}
+              disabled={playbackLocked}
               style={
                 {
                   "--progress": `${duration ? (time / duration) * 100 : 0}%`,
@@ -1995,6 +2567,7 @@ export function App() {
             max="1"
             step="0.01"
             value={volume}
+            disabled={playbackLocked}
             onChange={(e) => setVolume(Number(e.target.value))}
           />
         </label>

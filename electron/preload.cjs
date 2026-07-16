@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld('blackMambaDesktop', {
     return () => ipcRenderer.removeListener('transport', listener);
   },
   onUpdateStatus: (callback) => { const listener = (_event, status) => callback(status); ipcRenderer.on('update-status', listener); return () => ipcRenderer.removeListener('update-status', listener); },
+  openSunoWindow: () => ipcRenderer.send('open-suno-window'),
 });

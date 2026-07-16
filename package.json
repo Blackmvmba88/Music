@@ -30,10 +30,12 @@
     "library:ownership": "node scripts/apply-ownership-rules.mjs",
     "library:audit-sources": "node scripts/audit-source-availability.mjs",
     "library:prepare-suno": "node scripts/prepare-suno-recovery.mjs",
+    "library:import-suno": "node scripts/import-suno-enriched.mjs",
     "library:merge-soundcloud": "node scripts/merge-soundcloud-catalog.mjs",
     "library:download-soundcloud": "node scripts/download-soundcloud-tracks.mjs",
     "library:download-soundcloud:dry": "node scripts/download-soundcloud-tracks.mjs --dry-run",
     "library:watch-downloads": "node scripts/watch-downloads.mjs",
+    "library:lyrics": "node scripts/extract-lyrics.mjs",
     "library:rebuild-catalog": "node scripts/sync-mp3-library.mjs && node scripts/merge-soundcloud-catalog.mjs",
     "desktop:dev": "npm run build && electron .",
     "desktop:pack": "npm run build && electron-builder --dir",
@@ -78,6 +80,8 @@
       "!dist/player/*.mp3",
       "!dist/music/*.mp3",
       "electron/**/*",
+      "suno-library-enriched.json",
+      "soundcloud-local-audit.json",
       "package.json"
     ],
     "directories": {

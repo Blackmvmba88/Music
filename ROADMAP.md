@@ -2,6 +2,14 @@
 
 Cada fase se considera terminada sólo con implementación y validación verificable.
 
+## Arquitectura integrada Music
+
+- [x] Reproductor y Escuela de Música accesibles dentro del mismo producto.
+- [x] Herramienta histórica de catálogo Python conservada en `tools/catalog-legacy`.
+- [x] Diseños, scripts y divergencias de `Documents/Reproductor` preservados.
+- [ ] Revisar el parche histórico e incorporar únicamente mejoras que no estén superadas.
+- [ ] Renombrar el repositorio remoto de GitHub de `Reproductor` a `Music`.
+
 ## Entrenamiento musical
 
 ### Nivel 1 · fundamentos — completado

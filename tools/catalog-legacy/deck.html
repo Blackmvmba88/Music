@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Music Deck</title>
+  <style>
+    :root {
+      --bg: #040405;
+      --panel: rgba(13, 12, 16, 0.92);
+      --text: #f3efe8;
+      --muted: rgba(243, 239, 232, 0.62);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% 10%, rgba(255, 84, 128, 0.22), transparent 24%),
+        radial-gradient(circle at 80% 18%, rgba(100, 118, 255, 0.18), transparent 20%),
+        radial-gradient(circle at 50% 90%, rgba(72, 221, 177, 0.12), transparent 26%),
+        linear-gradient(180deg, #060608 0%, #030304 100%);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow-x: hidden;
+    }
+    .wrap {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+    .hero {
+      position: relative;
+      padding: 26px 28px;
+      border-radius: 30px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)), var(--panel);
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.02), 0 24px 70px rgba(0,0,0,0.55);
+      overflow: hidden;
+    }
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: -2px;
+      border-radius: 32px;
+      background: conic-gradient(from 180deg, #ff4fa0, #ffd166, #6ee7ff, #8b5cf6, #ff4fa0);
+      filter: blur(18px);
+      opacity: 0.35;
+      animation: spin 10s linear infinite;
+      z-index: 0;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      border-radius: 29px;
+      background: linear-gradient(180deg, rgba(6,6,8,0.72), rgba(8,8,10,0.92));
+      z-index: 0;
+    }
+    .hero > * { position: relative; z-index: 1; }
+    .eyebrow {
+      margin: 0 0 6px;
+      color: #ff8fd0;
+      font-size: 12px;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(2.2rem, 6vw, 5rem);
+      line-height: 0.95;
+      letter-spacing: -0.06em;
+    }
+    .lede {
+      margin: 12px 0 0;
+      max-width: 70ch;
+      color: var(--muted);
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+    .stat {
+      padding: 18px;
+      border-radius: 22px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      backdrop-filter: blur(18px);
+    }
+    .stat b { display: block; font-size: 2rem; }
+    .stat span { color: var(--muted); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 18px;
+      margin-top: 20px;
+    }
+    .track-card {
+      position: relative;
+      padding: 18px;
+      border-radius: 26px;
+      overflow: hidden;
+      min-height: 220px;
+      background: rgba(14, 14, 18, 0.82);
+      border: 1px solid rgba(255,255,255,0.09);
+      box-shadow: 0 12px 36px rgba(0,0,0,0.35);
+      transform: translateZ(0);
+    }
+    .track-card::before {
+      content: "";
+      position: absolute;
+      inset: -2px;
+      border-radius: 28px;
+      background: linear-gradient(120deg, transparent, rgba(255,255,255,0.14), transparent);
+      opacity: 0.0;
+      animation: sweep 4.8s linear infinite;
+    }
+    .track-card__halo {
+      position: absolute;
+      inset: -20px;
+      background: radial-gradient(circle at 50% 20%, rgba(255, 89, 154, 0.28), transparent 40%), radial-gradient(circle at 80% 70%, rgba(59, 183, 255, 0.16), transparent 34%);
+      filter: blur(16px);
+      opacity: 0.8;
+      animation: pulse 4s ease-in-out infinite;
+    }
+    .track-card__header, .track-meta, .track-wave { position: relative; z-index: 1; }
+    .track-card__header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: start;
+    }
+    .track-card h2 {
+      margin: 4px 0 0;
+      font-size: 1.25rem;
+      letter-spacing: -0.04em;
+    }
+    .track-chip, .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 0 10px;
+      min-height: 26px;
+      border-radius: 999px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .track-chip {
+      background: rgba(255,255,255,0.05);
+      color: #ffe5f4;
+      white-space: nowrap;
+    }
+    .track-wave {
+      display: grid;
+      grid-template-columns: repeat(24, 1fr);
+      align-items: end;
+      gap: 4px;
+      height: 96px;
+      margin: 16px 0 12px;
+      padding: 16px 10px;
+      border-radius: 20px;
+      background: rgba(0,0,0,0.24);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .track-wave i {
+      display: block;
+      border-radius: 999px 999px 6px 6px;
+      height: var(--h);
+      min-height: 14%;
+      background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(255,255,255,0.12));
+      box-shadow: 0 0 16px currentColor;
+      animation: throb 1.6s ease-in-out infinite;
+      animation-delay: calc(var(--delay, 0) * 120ms);
+    }
+    .neon-a .track-wave i { color: #ff4fa0; }
+    .neon-b .track-wave i { color: #7df9ff; }
+    .neon-c .track-wave i { color: #a6ff4d; }
+    .neon-d .track-wave i { color: #ffd166; }
+    .neon-e .track-wave i { color: #b388ff; }
+    .track-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .pill--status { color: #9be7ff; background: rgba(59,183,255,0.12); }
+    .pill--decision { color: #c6ffa7; background: rgba(158,255,74,0.12); }
+    .pill--date { color: #ffd7a6; background: rgba(255,209,102,0.12); }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.55; transform: scale(0.99); }
+      50% { opacity: 1; transform: scale(1.03); }
+    }
+    @keyframes sweep {
+      0% { transform: translateX(-120%); opacity: 0; }
+      25% { opacity: 0.6; }
+      50% { opacity: 0.0; }
+      100% { transform: translateX(120%); opacity: 0; }
+    }
+    @keyframes throb {
+      0%, 100% { transform: scaleY(0.78); filter: saturate(1); }
+      50% { transform: scaleY(1.18); filter: saturate(1.3); }
+    }
+    @media (max-width: 720px) {
+      .wrap { padding: 16px; }
+      .stats { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <p class="eyebrow">BlackMamba Audio Deck</p>
+      <h1>Music with aura.</h1>
+      <p class="lede">Biblioteca viva para ordenar, clasificar y depurar una colección única. La interfaz respira con luz, brillo y movimiento para que cada pista tenga presencia propia.</p>
+      <div class="stats">
+        <div class="stat"><b>2</b><span>pistas</span></div>
+        <div class="stat"><b>2</b><span>con género</span></div>
+        <div class="stat"><b>1</b><span>keep</span></div>
+      </div>
+    </section>
+    <section class="grid">
+      
+            <article class="track-card neon-a">
+              <div class="track-card__halo"></div>
+              <div class="track-card__header">
+                <div>
+                  <p class="eyebrow">Audio Deck</p>
+                  <h2>Cancion prueba</h2>
+                </div>
+                <div class="track-chip">demo</div>
+              </div>
+              <div class="track-wave"><i style="--h:98%;--delay:0"></i><i style="--h:11%;--delay:1"></i><i style="--h:24%;--delay:2"></i><i style="--h:37%;--delay:3"></i><i style="--h:50%;--delay:4"></i><i style="--h:63%;--delay:5"></i><i style="--h:76%;--delay:6"></i><i style="--h:89%;--delay:7"></i><i style="--h:2%;--delay:8"></i><i style="--h:15%;--delay:9"></i><i style="--h:28%;--delay:10"></i><i style="--h:41%;--delay:11"></i><i style="--h:54%;--delay:12"></i><i style="--h:67%;--delay:13"></i><i style="--h:80%;--delay:14"></i><i style="--h:93%;--delay:15"></i><i style="--h:6%;--delay:16"></i><i style="--h:19%;--delay:17"></i><i style="--h:32%;--delay:18"></i><i style="--h:45%;--delay:19"></i><i style="--h:58%;--delay:20"></i><i style="--h:71%;--delay:21"></i><i style="--h:84%;--delay:22"></i><i style="--h:97%;--delay:23"></i></div>
+              <div class="track-meta">
+                <span class="pill pill--status">published</span>
+                <span class="pill pill--decision">—</span>
+                <span class="pill pill--date">2026-06-18</span>
+              </div>
+            </article>
+            
+            <article class="track-card neon-b">
+              <div class="track-card__halo"></div>
+              <div class="track-card__header">
+                <div>
+                  <p class="eyebrow">Audio Deck</p>
+                  <h2>Galaxia Aprendida</h2>
+                </div>
+                <div class="track-chip">AI Electronic</div>
+              </div>
+              <div class="track-wave"><i style="--h:19%;--delay:0"></i><i style="--h:32%;--delay:1"></i><i style="--h:45%;--delay:2"></i><i style="--h:58%;--delay:3"></i><i style="--h:71%;--delay:4"></i><i style="--h:84%;--delay:5"></i><i style="--h:97%;--delay:6"></i><i style="--h:10%;--delay:7"></i><i style="--h:23%;--delay:8"></i><i style="--h:36%;--delay:9"></i><i style="--h:49%;--delay:10"></i><i style="--h:62%;--delay:11"></i><i style="--h:75%;--delay:12"></i><i style="--h:88%;--delay:13"></i><i style="--h:1%;--delay:14"></i><i style="--h:14%;--delay:15"></i><i style="--h:27%;--delay:16"></i><i style="--h:40%;--delay:17"></i><i style="--h:53%;--delay:18"></i><i style="--h:66%;--delay:19"></i><i style="--h:79%;--delay:20"></i><i style="--h:92%;--delay:21"></i><i style="--h:5%;--delay:22"></i><i style="--h:18%;--delay:23"></i></div>
+              <div class="track-meta">
+                <span class="pill pill--status">published</span>
+                <span class="pill pill--decision">keep</span>
+                <span class="pill pill--date">2026-06-02</span>
+              </div>
+            </article>
+            
+    </section>
+  </main>
+</body>
+</html>

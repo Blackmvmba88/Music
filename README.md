@@ -2,12 +2,26 @@
 
 Reproductor y biblioteca privada de BlackMamba Records. Funciona como WebUI local en `/music` y como aplicación de escritorio para macOS. Los audios canónicos pueden permanecer en la USB; el DMG no incorpora MP3 ni WAV.
 
+Este repositorio es el producto integrado `Music`: contiene el reproductor, la
+Escuela de Música, el catálogo, los conectores Suno/SoundCloud y las
+herramientas heredadas. El reproductor es un módulo del sistema, no el nombre
+del sistema completo.
+
+Material consolidado durante la migración:
+
+- `tools/catalog-legacy/`: catálogo Python procedente del antiguo repositorio
+  local `music`.
+- `docs/designs/legacy-reproductor/`: diseños exclusivos conservados desde la
+  copia histórica `Documents/Reproductor`.
+- `docs/migrations/reproductor-working-tree-2026-07-15.patch`: cambios locales
+  divergentes de esa copia, preservados antes de la consolidación.
+
 ## Estado actual
 
 - Biblioteca unificada USB + fichas recuperables desde Suno o SoundCloud.
 - Reproducción local con `play`, pausa, stop, anterior, siguiente, ±10 segundos, volumen, timeline y shuffle.
 - Canción activa centrada y siempre visible.
-- Búsqueda por título, artista, archivo, URL, hashtags, letra y metadatos; ignora acentos y mayúsculas.
+- Búsqueda ligera por título, artista, archivo, URL, hashtags y metadatos de índice; ignora acentos y mayúsculas.
 - Calificación de 1 a 5 estrellas durante la reproducción y ordenamiento por estrellas.
 - Historial local de las últimas 100 reproducciones.
 - Descarga independiente del archivo local de cada canción; recuperación guiada desde Suno o SoundCloud cuando todavía no está materializada.
@@ -74,6 +88,27 @@ El artefacto queda en `release/BlackMamba-Music-0.2.0-arm64.dmg`.
 | `npm run clean`               | Borra únicamente artefactos generados            |
 
 Los comandos de biblioteca USB se documentan en [METACOMMANDS.md](./METACOMMANDS.md). Algunos eliminan archivos después de verificar hashes; deben ejecutarse deliberadamente.
+
+La biblioteca principal combina una sola ficha por canción con disponibilidad
+independiente en USB/local, Suno y SoundCloud. Para importar el inventario Suno
+enriquecido y validado:
+
+```bash
+npm run library:import-suno
+```
+
+El reproductor muestra también canciones que sólo existen en Suno y conserva
+badges apagados/activos para distinguir las plataformas donde está cada obra.
+
+El arranque usa un catálogo ligero en `/player/library.json`. Las letras,
+descripciones, evidencias y advertencias extensas se solicitan por canción a
+`/api/tracks/:id/details` al abrir la letra o el editor. La vista Suno tampoco
+transfiere todas las letras durante su carga inicial.
+
+Las calificaciones se guardan tanto en el perfil local como en
+`ratings.json` dentro de los datos persistentes de la aplicación. El servidor
+usa normalmente `127.0.0.1:17892`, evitando que un puerto aleatorio cambie el
+origen del almacenamiento entre reinicios.
 
 Para preparar la recuperación desde Suno:
 
