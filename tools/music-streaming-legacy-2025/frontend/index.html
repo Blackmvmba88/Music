@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Music Streaming Player</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎵 Music Streaming Player</h1>
+            <p class="subtitle">Paste a YouTube or video URL to play audio</p>
+        </header>
+        
+        <main>
+            <div class="search-section">
+                <div class="search-input-wrapper">
+                    <input 
+                        type="text" 
+                        id="search-input" 
+                        placeholder="Search for music..."
+                        autocomplete="off"
+                    >
+                    <button id="search-btn" class="search-button">
+                        <span class="search-icon">🔍</span>
+                        Search
+                    </button>
+                </div>
+                <div id="search-results" class="search-results"></div>
+            </div>
+
+            <div class="divider">or enter URL directly</div>
+
+            <div class="input-section">
+                <input 
+                    type="text" 
+                    id="url-input" 
+                    placeholder="Enter video URL (YouTube, etc.)"
+                    autocomplete="off"
+                >
+                <button id="play-btn" class="play-button">
+                    <span class="play-icon">▶</span>
+                    Play
+                </button>
+            </div>
+            
+            <div class="track-info" id="track-info">
+                <span id="track-title">No track loaded</span>
+            </div>
+            
+            <div class="waveform-container">
+                <canvas id="waveform-canvas"></canvas>
+            </div>
+            
+            <div class="controls">
+                <div class="volume-control">
+                    <span class="volume-icon">🔊</span>
+                    <input type="range" id="volume-slider" min="0" max="100" value="80">
+                </div>
+            </div>
+            
+            <audio id="audio-player" style="display: none;"></audio>
+        </main>
+        
+        <footer>
+            <p>Powered by yt-dlp & FastAPI</p>
+            <p>Created by Jesus Moran</p>
+        </footer>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>

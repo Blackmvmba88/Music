@@ -11,6 +11,9 @@ Material consolidado durante la migración:
 
 - `tools/catalog-legacy/`: catálogo Python procedente del antiguo repositorio
   local `music`.
+- `tools/music-streaming-legacy-2025/`: aplicación histórica FastAPI/yt-dlp
+  recuperada del repositorio remoto `Blackmvmba88/music`, incluida su búsqueda,
+  streaming y visualizador sinusoidal.
 - `docs/designs/legacy-reproductor/`: diseños exclusivos conservados desde la
   copia histórica `Documents/Reproductor`.
 - `docs/migrations/reproductor-working-tree-2026-07-15.patch`: cambios locales
