@@ -14,6 +14,7 @@ export default tseslint.config(
       "public/player",
       ".venv",
       ".venv-*",
+      "tools/music-streaming-legacy-2025",
     ],
   },
   js.configs.recommended,
