@@ -1879,11 +1879,83 @@ footer {
 .player-rating button.filled {
   color: var(--acid);
   text-shadow: 0 0 14px color-mix(in srgb, var(--theme-glow, var(--acid)) 75%, transparent);
-  animation: star-pop 0.3s ease-out;
+  transform-origin: 50% 52%;
+  animation:
+    star-pop 0.3s ease-out,
+    star-spin 3.6s linear 0.3s infinite;
 }
+.review-actions .star-rating button.filled:nth-child(2),
+.player-rating button.filled:nth-child(2) { animation-delay: 0s, 0.42s; }
+.review-actions .star-rating button.filled:nth-child(3),
+.player-rating button.filled:nth-child(3) { animation-delay: 0s, 0.54s; }
+.review-actions .star-rating button.filled:nth-child(4),
+.player-rating button.filled:nth-child(4) { animation-delay: 0s, 0.66s; }
+.review-actions .star-rating button.filled:nth-child(5),
+.player-rating button.filled:nth-child(5) { animation-delay: 0s, 0.78s; }
 .player-rating button:not(.filled):hover {
   color: var(--acid);
   transition: color 0.12s ease;
+}
+
+@keyframes star-spin {
+  0% { transform: rotate(0deg) scale(1); }
+  45% { transform: rotate(162deg) scale(1.08); }
+  55% { transform: rotate(198deg) scale(1.08); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+/* ── Persistent page navigation ─────────────────────────────── */
+.scroll-buttons {
+  position: fixed;
+  z-index: 120;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: calc(148px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  pointer-events: auto;
+}
+.scroll-buttons button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--acid) 48%, #333b45);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--theme-surface, #10151c) 88%, transparent);
+  color: var(--acid);
+  box-shadow:
+    0 10px 28px #0009,
+    0 0 20px color-mix(in srgb, var(--acid) 18%, transparent);
+  backdrop-filter: blur(14px);
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+.scroll-buttons button:hover,
+.scroll-buttons button:focus-visible {
+  transform: translateY(-2px) scale(1.08);
+  border-color: var(--acid);
+  box-shadow:
+    0 14px 32px #000b,
+    0 0 26px color-mix(in srgb, var(--acid) 38%, transparent);
+  outline: none;
+}
+.scroll-buttons button:active { transform: scale(0.94); }
+
+@media (max-width: 680px) {
+  .scroll-buttons {
+    right: max(10px, env(safe-area-inset-right));
+    bottom: calc(166px + env(safe-area-inset-bottom));
+    gap: 7px;
+  }
+  .scroll-buttons button { width: 40px; height: 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-actions .star-rating button.filled,
+  .player-rating button.filled { animation: none; }
+  .scroll-buttons button { transition: none; }
 }
 
 /* ── Cover breathe glow when playing ────────────────────────── */
