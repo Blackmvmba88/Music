@@ -1,0 +1,28 @@
+{
+  "completedAt": "2026-07-15T20:02:04.799890+00:00",
+  "attempted": 2,
+  "done": 0,
+  "errors": 2,
+  "results": [
+    {
+      "id": "ca6a5cf577f40d6f",
+      "title": "Fuego y Viento",
+      "durationSeconds": 178.8,
+      "status": "error",
+      "elapsedSeconds": 18.1,
+      "lyricsConfidence": 0.2,
+      "warning": "No se detectó voz suficiente en dos pasadas; probablemente es instrumental",
+      "stderr": "\nFetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]\nFetching 4 files: 100%|██████████| 4/4 [00:00<00:00, 16946.68it/s]\n\n  0%|          | 0/17880 [00:00<?, ?frames/s]\n 17%|█▋        | 3000/17880 [00:03<00:17, 846.31frames/s]\n 33%|███▎      | 5880/17880 [00:06<00:12, 943.77frames/s]\n 33%|███▎      | 5880/17880 [00:06<00:12, 927.38frames/s]\n\nFetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]\nFetching 4 files: 100%|██████████| 4/4 [00:00<00:00, 4819.65it/s]\n\n  0%|          | 0/17880 [00:00<?, ?frames/s]\n 17%|█▋        | 3000/17880 [00:00<00:04, 3192.89frames/s]\n 34%|███▎      | 6000/17880 [00:04<00:09, 1206.42frames/s]\n 34%|███▎      | 6000/17880 [00:05<00:10, 1118.58frames/s]\nTraceback (most recent call last):\n  File \"/Users/blackmambarecords/Documents/Reproductor/scripts/transcribe-one-track.py\", line 69, in <module>\n    raise RuntimeError(\"no_vocals_detected\")\nRuntimeError: no_vocals_detected\n"
+    },
+    {
+      "id": "1806dcd8ca043271",
+      "title": "Ancestral Pulse",
+      "durationSeconds": 178.16,
+      "status": "error",
+      "elapsedSeconds": 12.2,
+      "lyricsConfidence": 0.2,
+      "warning": "No se detectó voz suficiente en dos pasadas; probablemente es instrumental",
+      "stderr": "\nFetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]\nFetching 4 files: 100%|██████████| 4/4 [00:00<00:00, 8351.03it/s]\n\n  0%|          | 0/17816 [00:00<?, ?frames/s]\n  0%|          | 0/17816 [00:01<?, ?frames/s]\n\nFetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]\nFetching 4 files: 100%|██████████| 4/4 [00:00<00:00, 3765.93it/s]\n\n  0%|          | 0/17816 [00:00<?, ?frames/s]\n 17%|█▋        | 3000/17816 [00:00<00:04, 3566.22frames/s]\n 17%|█▋        | 3000/17816 [00:05<00:25, 576.45frames/s] \nTraceback (most recent call last):\n  File \"/Users/blackmambarecords/Documents/Reproductor/scripts/transcribe-one-track.py\", line 69, in <module>\n    raise RuntimeError(\"no_vocals_detected\")\nRuntimeError: no_vocals_detected\n"
+    }
+  ]
+}
