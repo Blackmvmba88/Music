@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
 import { GridFour } from "@phosphor-icons/react/GridFour";
 import { ListBullets } from "@phosphor-icons/react/ListBullets";
@@ -11,8 +11,21 @@ import { SkipBack } from "@phosphor-icons/react/SkipBack";
 import { SkipForward } from "@phosphor-icons/react/SkipForward";
 import { Shuffle } from "@phosphor-icons/react/Shuffle";
 import { DownloadSimple } from "@phosphor-icons/react/DownloadSimple";
+import { CornersOut } from "@phosphor-icons/react/CornersOut";
+import { GearSix } from "@phosphor-icons/react/GearSix";
+import { WaveSine } from "@phosphor-icons/react/WaveSine";
+import { Gauge } from "@phosphor-icons/react/Gauge";
+import { Power } from "@phosphor-icons/react/Power";
+import { ImageSquare } from "@phosphor-icons/react/ImageSquare";
+import { Trash } from "@phosphor-icons/react/Trash";
+import { PencilSimple } from "@phosphor-icons/react/PencilSimple";
+import { FileVideo } from "@phosphor-icons/react/FileVideo";
 import { AudioVisualizer } from "./AudioVisualizer";
+import { PlaybackTimeline } from "./PlaybackTimeline";
 import { loadCatalog } from "../api/catalog";
+import { signInWithPopup, signOut, onAuthStateChanged, type User } from "firebase/auth";
+import { auth, googleProvider, githubProvider } from "../auth/firebase";
+import { fetchUserRatings, fetchUserReviews, saveUserRating, saveUserReview, syncLocalDataToFirestore } from "../storage/sync";
 
 type Track = {
   id?: string;
@@ -24,6 +37,7 @@ type Track = {
   sourceUrl?: string | null;
   duration: string;
   tag: string;
+  genres?: string[];
   hashtags?: string[];
   permalink?: string;
   description?: string;
@@ -49,6 +63,8 @@ type Track = {
   panoramicCover?: string | null;
   lyrics?: string;
   hasLyrics?: boolean;
+  lyricKeywords?: string[];
+  lyricKeywordsSource?: "auto" | "manual";
   warnings?: string[];
   localStatus?: "available" | "recoverable";
   localFormat?: "mp3" | "wav" | null;
@@ -72,13 +88,19 @@ type Track = {
 type ReviewStatus = "belongs" | "reject" | "later";
 type LayoutMode = "combined" | "grid" | "review" | "focus" | "winamp";
 type MotionMode = "full" | "reduced" | "off";
+type AppFont = "dm-sans" | "oswald" | "mono" | "system";
+type CoverAsset = { id?: string; file: string; url: string; originalName: string; width?: number; height?: number; prompt?: string; keywords?: string[]; origins?: Array<{ path: string }> };
+type CoverKind = "square" | "panoramic" | "other";
+type LyricProgress = { progress: number; message: string; status: "queued" | "running" | "done" | "error"; error?: string };
 type SortMode = "catalog" | "rating-desc" | "rating-asc" | "title-asc" | "title-desc" | "plays-desc" | "plays-asc" | "genre-asc" | "genre-desc";
+type SourceFilter = "all" | "local" | "recoverable" | "missing-cover" | "missing-lyrics";
 type PlaybackHistoryEntry = {
   trackKey: string;
   title: string;
   artist: string;
   playedAt: number;
 };
+type Playlist = { id: string; name: string; trackKeys: string[] };
 type VisualPreset = "sunset" | "dawn" | "violet" | "ember";
 type VisualTheme = {
   preset: VisualPreset;
@@ -94,8 +116,25 @@ type VisualTheme = {
 const CATALOG_IDENTITY = {
   artist: "Iyari Gomez",
   postAuthor: "Iyari Cancino Gomez",
+  composer: "Iyari Cancino Gomez",
   recordLabel: "BlackMamba RECORDS",
+  pLine: "2025 BlackMamba RECORDS",
 } as const;
+const GENRES = ["Reggae", "Rock", "Reggaeton", "Pop", "Clásica", "Electrónica", "Corrido", "Rap"] as const;
+const GENRE_COLORS: Record<(typeof GENRES)[number], string> = {
+  Reggae: "#44e06f",
+  Rock: "#ff3b45",
+  Reggaeton: "#ff8a2b",
+  Pop: "#ff58c8",
+  Clásica: "#f4d35e",
+  Electrónica: "#29d9ff",
+  Corrido: "#a97bff",
+  Rap: "#f4f4f5",
+};
+const trackGenres = (item: Pick<Track, "genres" | "tag">) => {
+  const selected = item.genres?.length ? item.genres : String(item.tag || "").split(",").map((value) => value.trim());
+  return GENRES.filter((genre) => selected.includes(genre));
+};
 const VISUAL_PRESETS: Record<VisualPreset, VisualTheme> = {
   sunset: {
     preset: "sunset",
@@ -295,13 +334,9 @@ const initialTracks: Track[] = [
   },
 ];
 
-const formatTime = (seconds: number) => {
-  if (!Number.isFinite(seconds)) return "0:00";
-  return `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60)
-    .toString()
-    .padStart(2, "0")}`;
-};
 import { loadProfile, saveRatings } from "../storage/local-profile";
+import { mergeTrackMetadata } from "../storage/track-metadata";
+import { extractTextKeywords, keywordMatch, sanitizeKeywords } from "../storage/keyword-metadata";
 
 const normalizeSearch = (value: string) =>
   value
@@ -312,16 +347,26 @@ const normalizeSearch = (value: string) =>
 
 export function App() {
   const audio = useRef<HTMLAudioElement>(null);
+  const playbackIntent = useRef(false);
+  const consecutivePlaybackErrors = useRef(0);
   const trackRows = useRef(new Map<string, HTMLDivElement>());
   const themeReady = useRef(false);
   const [current, setCurrent] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [shuffle, setShuffle] = useState(false);
-  const [time, setTime] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const [shuffle, setShuffle] = useState(
+    () => localStorage.getItem("blackmamba-shuffle") === "true",
+  );
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
-  const [volume, setVolume] = useState(0.8);
+  const [volume, setVolume] = useState(() => {
+    if (localStorage.getItem("blackmamba-volume-100-migrated") !== "true") {
+      localStorage.setItem("blackmamba-volume-100-migrated", "true");
+      return 1;
+    }
+    const stored = localStorage.getItem("blackmamba-volume");
+    const saved = stored === null ? Number.NaN : Number(stored);
+    return Number.isFinite(saved) && saved >= 0 && saved <= 1 ? saved : 1;
+  });
   const [tracks, setTracks] = useState<Track[]>(initialTracks);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [loading, setLoading] = useState(true);
@@ -329,13 +374,53 @@ export function App() {
     "all" | "pending" | ReviewStatus
   >("all");
   const [sortMode, setSortMode] = useState<SortMode>("catalog");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [openLyrics, setOpenLyrics] = useState<string | null>(null);
   const [editingTrack, setEditingTrack] = useState<Track | null>(null);
+  const [trackSaveStatus, setTrackSaveStatus] = useState<"idle" | "saving" | "error">("idle");
+  const [trackSaveMessage, setTrackSaveMessage] = useState("");
+  const [renamingTrack, setRenamingTrack] = useState<Track | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [editDraft, setEditDraft] = useState<Partial<Track>>({});
   const [themeIndex, setThemeIndex] = useState(1);
   const [layout, setLayout] = useState<LayoutMode>("combined");
   const [motion, setMotion] = useState<MotionMode>("full");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [appFont, setAppFont] = useState<AppFont>(() =>
+    (localStorage.getItem("blackmamba-ui-font") as AppFont) || "dm-sans",
+  );
+  const [titleFont, setTitleFont] = useState<AppFont>(() =>
+    (localStorage.getItem("blackmamba-title-font") as AppFont) || "oswald",
+  );
+  const [titleFontSize, setTitleFontSize] = useState(() => {
+    const stored = Number(localStorage.getItem("blackmamba-title-font-size"));
+    return Number.isFinite(stored) && stored >= 12 && stored <= 32 ? stored : 17;
+  });
+  const [ledColor, setLedColor] = useState(
+    () => localStorage.getItem("blackmamba-led-color") || "#32f5ff",
+  );
+  const [showImages, setShowImages] = useState(false);
+  const [showWebMp3, setShowWebMp3] = useState(false);
+  const [showLyricsStudio, setShowLyricsStudio] = useState(false);
+  const [lyricsStudioQuery, setLyricsStudioQuery] = useState("");
+  const [lyricsStudioTrack, setLyricsStudioTrack] = useState<string | null>(null);
+  const [lyricsStudioDraft, setLyricsStudioDraft] = useState("");
+  const [lyricsKeywordsDraft, setLyricsKeywordsDraft] = useState("");
+  const [lyricsStudioStatus, setLyricsStudioStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [coverAssets, setCoverAssets] = useState<CoverAsset[]>([]);
+  const [selectedCover, setSelectedCover] = useState<string | null>(null);
+  const [coverTarget, setCoverTarget] = useState("");
+  const [coverMessage, setCoverMessage] = useState("");
+  const [coverSearch, setCoverSearch] = useState("");
+  const [coverPromptDraft, setCoverPromptDraft] = useState("");
+  const [coverKeywordsDraft, setCoverKeywordsDraft] = useState("");
+  const [imageMetadataStatus, setImageMetadataStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [editingImages, setEditingImages] = useState(false);
+  const [selectedImages, setSelectedImages] = useState<Set<string>>(() => new Set());
+  const [lyricProgress, setLyricProgress] = useState<Record<string, LyricProgress>>({});
   const [downloadingTrack, setDownloadingTrack] = useState<Record<string, number>>({});
+  const [videoExtractStatus, setVideoExtractStatus] = useState<"idle" | "working" | "success" | "error">("idle");
+  const [videoExtractMessage, setVideoExtractMessage] = useState("");
   const [visibleCount, setVisibleCount] = useState(60);
   const [reviews, setReviews] = useState<Record<string, ReviewStatus>>(() => {
     try {
@@ -347,6 +432,8 @@ export function App() {
     }
   });
   const [ratings, setRatings] = useState<Record<string, number>>(() => loadProfile().ratings);
+  const [ratingsReady, setRatingsReady] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
   const [playbackHistory, setPlaybackHistory] = useState<
     PlaybackHistoryEntry[]
   >(() => {
@@ -358,7 +445,180 @@ export function App() {
       return [];
     }
   });
+  const [playlists, setPlaylists] = useState<Playlist[]>(() => {
+    try { return JSON.parse(localStorage.getItem("blackmamba-playlists") ?? "[]"); } catch { return []; }
+  });
+  const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
+  const [playlistEditing, setPlaylistEditing] = useState(false);
+  const [newPlaylistName, setNewPlaylistName] = useState("");
   const trackKey = (item: Track) => item.id ?? item.file;
+
+  const extractVideoMp3 = async () => {
+    const desktop = window.blackMambaDesktop;
+    if (!desktop?.extractVideoMp3 || videoExtractStatus === "working") return;
+    setVideoExtractStatus("working");
+    setVideoExtractMessage("Extrayendo audio del video…");
+    const result = await desktop.extractVideoMp3();
+    if (result.canceled) {
+      setVideoExtractStatus("idle");
+      setVideoExtractMessage("");
+      return;
+    }
+    if (result.ok) {
+      setVideoExtractStatus("success");
+      setVideoExtractMessage("MP3 listo en Descargas / Web-a-MP3");
+    } else {
+      setVideoExtractStatus("error");
+      setVideoExtractMessage(result.fallbackReason || result.warnings?.[0] || "No se pudo extraer el MP3");
+    }
+  };
+
+  useEffect(() => {
+    localStorage.setItem("blackmamba-ui-font", appFont);
+    localStorage.setItem("blackmamba-title-font", titleFont);
+    localStorage.setItem("blackmamba-title-font-size", String(titleFontSize));
+    localStorage.setItem("blackmamba-led-color", ledColor);
+  }, [appFont, titleFont, titleFontSize, ledColor]);
+
+  useEffect(() => {
+    localStorage.setItem("blackmamba-shuffle", String(shuffle));
+  }, [shuffle]);
+
+  useEffect(() => {
+    fetch("/api/cover-inbox", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("cover inbox unavailable")))
+      .then((payload) => setCoverAssets(Array.isArray(payload.images) ? payload.images : []))
+      .catch(() => setCoverAssets([]));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/profile/ratings", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("ratings unavailable")))
+      .then((payload) => setRatings((local) => ({ ...(payload.ratings ?? {}), ...local })))
+      .catch(() => undefined)
+      .finally(() => setRatingsReady(true));
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        // Sync local to Cloud
+        let localRatings = {};
+        try {
+          const stored = localStorage.getItem("blackmamba-vitrine-ratings");
+          localRatings = stored ? JSON.parse(stored) : {};
+        } catch {
+          localRatings = {};
+        }
+        if (!Object.keys(localRatings).length) {
+          localRatings = loadProfile().ratings;
+        }
+
+        let localReviews = {};
+        try {
+          const stored = localStorage.getItem("blackmamba-vitrine-reviews");
+          localReviews = stored ? JSON.parse(stored) : {};
+        } catch {
+          localReviews = {};
+        }
+
+        await syncLocalDataToFirestore(currentUser.uid, localRatings, localReviews);
+
+        // Load final merged state
+        const mergedRatings = await fetchUserRatings(currentUser.uid);
+        const mergedReviews = await fetchUserReviews(currentUser.uid);
+
+        setRatings(mergedRatings);
+        setReviews(mergedReviews as Record<string, ReviewStatus>);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const assignSelectedCover = async () => {
+    if (!selectedCover || !coverTarget) return;
+    const selectedAsset = coverAssets.find((asset) => asset.file === selectedCover);
+    const ratio = selectedAsset?.width && selectedAsset.height ? selectedAsset.width / selectedAsset.height : 1;
+    const kind: CoverKind = ratio >= 1.35 ? "panoramic" : "square";
+    setCoverMessage("Asignando portada…");
+    const response = await fetch("/api/assign-cover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageFile: selectedCover, trackId: coverTarget, kind }) });
+    if (!response.ok) { setCoverMessage("No se pudo asignar la portada"); return; }
+    const result = await response.json();
+    setTracks((items) => items.map((item) => trackKey(item) === coverTarget ? { ...item, cover: result.cover ?? item.cover, panoramicCover: result.panoramicCover ?? item.panoramicCover } : item));
+    setCoverMessage(kind === "panoramic" ? "Portada panorámica asignada" : "Portada cuadrada asignada");
+  };
+  const selectedCoverAsset = coverAssets.find((asset) => asset.file === selectedCover) ?? null;
+  const coverTargetTrack = tracks.find((item) => trackKey(item) === coverTarget) ?? null;
+  const targetLyricKeywords = useMemo(
+    () => coverTargetTrack?.lyricKeywords?.length ? coverTargetTrack.lyricKeywords : extractTextKeywords(coverTargetTrack?.lyrics ?? ""),
+    [coverTargetTrack],
+  );
+  useEffect(() => {
+    setCoverPromptDraft(selectedCoverAsset?.prompt ?? "");
+    setCoverKeywordsDraft((selectedCoverAsset?.keywords ?? []).join(", "));
+    setImageMetadataStatus("idle");
+  }, [selectedCoverAsset]);
+  const saveCoverMetadata = async () => {
+    if (!selectedCoverAsset) return;
+    setImageMetadataStatus("saving");
+    const keywords = sanitizeKeywords(coverKeywordsDraft || extractTextKeywords(coverPromptDraft));
+    try {
+      const response = await fetch(`/api/cover-inbox/${encodeURIComponent(selectedCoverAsset.file)}/metadata`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: coverPromptDraft, keywords }) });
+      if (!response.ok) throw new Error("image_metadata_not_saved");
+      setCoverAssets((assets) => assets.map((asset) => asset.file === selectedCoverAsset.file ? { ...asset, prompt: coverPromptDraft.trim(), keywords } : asset));
+      setCoverKeywordsDraft(keywords.join(", "));
+      setImageMetadataStatus("saved");
+    } catch { setImageMetadataStatus("error"); }
+  };
+  const coverGroups = useMemo(() => {
+    const groups: Record<CoverKind, CoverAsset[]> = { square: [], panoramic: [], other: [] };
+    const queryKeywords = sanitizeKeywords(coverSearch);
+    const candidates = coverAssets.filter((asset) => !queryKeywords.length || keywordMatch(queryKeywords, [...(asset.keywords ?? []), ...extractTextKeywords(asset.prompt ?? "")]).matches.length === queryKeywords.length);
+    const ranked = [...candidates].sort((left, right) => {
+      const leftScore = keywordMatch(targetLyricKeywords, [...(left.keywords ?? []), ...extractTextKeywords(left.prompt ?? "")]).score;
+      const rightScore = keywordMatch(targetLyricKeywords, [...(right.keywords ?? []), ...extractTextKeywords(right.prompt ?? "")]).score;
+      return rightScore - leftScore || left.originalName.localeCompare(right.originalName);
+    });
+    for (const asset of ranked) {
+      if (!asset.width || !asset.height) groups.other.push(asset);
+      else {
+        const ratio = asset.width / asset.height;
+        if (ratio >= 1.35) groups.panoramic.push(asset);
+        else if (ratio >= 0.85 && ratio <= 1.15) groups.square.push(asset);
+        else groups.other.push(asset);
+      }
+    }
+    return groups;
+  }, [coverAssets, coverSearch, targetLyricKeywords]);
+  const openCurrentCoverLibrary = () => {
+    if (!track) return;
+    setCoverTarget(trackKey(track));
+    setSelectedCover(null);
+    setCoverMessage(`Elige una imagen para ${track.title}`);
+    setShowImages(true);
+    setShowWebMp3(false);
+    setShowLyricsStudio(false);
+    window.setTimeout(() => document.querySelector(".cover-library")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  };
+  const deleteSelectedImages = async () => {
+    if (!selectedImages.size) return;
+    setCoverMessage(`Eliminando ${selectedImages.size} imagen(es)…`);
+    const response = await fetch("/api/delete-cover-assets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ files: [...selectedImages] }) });
+    if (!response.ok) { setCoverMessage("No se pudieron eliminar las imágenes"); return; }
+    const result = await response.json();
+    setCoverAssets((assets) => assets.filter((asset) => !selectedImages.has(asset.file)));
+    setSelectedImages(new Set());
+    setSelectedCover(null);
+    setCoverMessage(`${result.deleted} imagen(es) eliminadas de la bandeja`);
+  };
+
+  useEffect(() => {
+    const compact = layout === "winamp";
+    document.body.classList.toggle("winamp-compact", compact);
+    void window.blackMambaDesktop?.setCompactMode(compact);
+    return () => document.body.classList.remove("winamp-compact");
+  }, [layout]);
   
   const playCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -368,14 +628,44 @@ export function App() {
     return counts;
   }, [playbackHistory]);
 
+  const searchIndex = useMemo(() => {
+    const index = new Map<string, string>();
+    for (const item of tracks) {
+      index.set(
+        trackKey(item),
+        normalizeSearch(
+          `${item.title} ${item.artist} ${item.file} ${item.sourceUrl ?? ""} ${(item.hashtags ?? []).join(" ")} ${trackGenres(item).join(" ")} ${item.description ?? ""} ${item.albumTitle ?? ""} ${item.composer ?? ""} ${item.isrc ?? ""} ${item.lyrics ?? ""}`,
+        ),
+      );
+    }
+    return index;
+  }, [tracks]);
+
+  const trackIndexByKey = useMemo(
+    () => new Map(tracks.map((item, index) => [trackKey(item), index])),
+    [tracks],
+  );
+  const activePlaylist = playlists.find((item) => item.id === activePlaylistId) ?? null;
+  const activePlaylistKeys = useMemo(() => new Set(activePlaylist?.trackKeys ?? []), [activePlaylist]);
+  const playbackQueue = useMemo(
+    () => activePlaylist ? tracks.filter((item) => activePlaylistKeys.has(trackKey(item))) : tracks,
+    [activePlaylist, activePlaylistKeys, tracks],
+  );
+
   const filtered = useMemo(() => {
+    const normalizedQuery = normalizeSearch(deferredQuery);
     const matchingTracks = tracks.filter((item) => {
-      const matchesQuery = normalizeSearch(
-        `${item.title} ${item.artist} ${item.file} ${item.sourceUrl ?? ""} ${(item.hashtags ?? []).join(" ")} ${item.description ?? ""} ${item.albumTitle ?? ""} ${item.composer ?? ""} ${item.isrc ?? ""} ${item.lyrics ?? ""}`,
-      ).includes(normalizeSearch(deferredQuery));
+      const matchesQuery = (searchIndex.get(trackKey(item)) ?? "").includes(
+        normalizedQuery,
+      );
       const status = reviews[trackKey(item)];
+      const matchesSource = sourceFilter === "all"
+        || (sourceFilter === "local" && item.localStatus === "available")
+        || (sourceFilter === "recoverable" && item.localStatus === "recoverable")
+        || (sourceFilter === "missing-cover" && !item.cover)
+        || (sourceFilter === "missing-lyrics" && !item.hasLyrics);
       return (
-        matchesQuery &&
+        matchesQuery && matchesSource && (!activePlaylist || playlistEditing || activePlaylistKeys.has(trackKey(item))) &&
         (reviewFilter === "all" ||
           (reviewFilter === "pending" ? !status : status === reviewFilter))
       );
@@ -408,9 +698,17 @@ export function App() {
         return sortMode === "rating-desc" ? -difference : difference;
       })
       .map(({ item }) => item);
-  }, [deferredQuery, sortMode, ratings, reviewFilter, reviews, tracks, playCounts]);
-  const visibleTracks = filtered.slice(0, visibleCount);
+  }, [activePlaylist, activePlaylistKeys, deferredQuery, playlistEditing, sortMode, ratings, reviewFilter, reviews, sourceFilter, tracks, playCounts, searchIndex]);
   const track = tracks[current];
+  const visibleTracks = useMemo(() => {
+    const base = filtered.slice(0, visibleCount);
+    if (!track) return base;
+    const currentKey = trackKey(track);
+    const currentMatch = filtered.find((item) => trackKey(item) === currentKey);
+    return currentMatch && !base.some((item) => trackKey(item) === currentKey)
+      ? [...base, currentMatch]
+      : base;
+  }, [filtered, track, visibleCount]);
   const visualTheme = track?.visualTheme;
   const theme = visualTheme
     ? {
@@ -432,6 +730,51 @@ export function App() {
       ),
     [reviews, tracks],
   );
+  const sourceCounts = useMemo(() => tracks.reduce((total, item) => {
+    if (item.localStatus === "available") total.local += 1;
+    if (item.localStatus === "recoverable") total.recoverable += 1;
+    if (!item.cover) total.missingCover += 1;
+    if (!item.hasLyrics) total.missingLyrics += 1;
+    return total;
+  }, { local: 0, recoverable: 0, missingCover: 0, missingLyrics: 0 }), [tracks]);
+  const lyricsStudioItems = useMemo(() => {
+    const needle = normalizeSearch(lyricsStudioQuery);
+    return tracks
+      .filter((item) => !needle || normalizeSearch(`${item.title} ${item.artist}`).includes(needle))
+      .sort((left, right) => Number(Boolean(left.hasLyrics)) - Number(Boolean(right.hasLyrics)) || left.title.localeCompare(right.title));
+  }, [lyricsStudioQuery, tracks]);
+  const selectedLyricsStudioTrack = tracks.find((item) => trackKey(item) === lyricsStudioTrack) ?? null;
+
+  const openLyricsStudioTrack = (item: Track) => {
+    setLyricsStudioTrack(trackKey(item));
+    setLyricsStudioDraft(item.lyrics ?? "");
+    setLyricsKeywordsDraft((item.lyricKeywords?.length ? item.lyricKeywords : extractTextKeywords(item.lyrics ?? "")).join(", "));
+    setLyricsStudioStatus("idle");
+  };
+
+  const saveLyricsStudio = async () => {
+    if (!selectedLyricsStudioTrack?.id || selectedLyricsStudioTrack.localStatus !== "available") {
+      setLyricsStudioStatus("error");
+      return;
+    }
+    setLyricsStudioStatus("saving");
+    try {
+      const response = await fetch(`/api/tracks/${encodeURIComponent(selectedLyricsStudioTrack.id)}/lyrics`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lyrics: lyricsStudioDraft }) });
+      if (!response.ok) throw new Error("lyrics_not_saved");
+      const keywords = sanitizeKeywords(lyricsKeywordsDraft || extractTextKeywords(lyricsStudioDraft));
+      const keywordsResponse = await fetch(`/api/tracks/${encodeURIComponent(selectedLyricsStudioTrack.id)}/keywords`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keywords }) });
+      if (!keywordsResponse.ok) throw new Error("keywords_not_saved");
+      const key = trackKey(selectedLyricsStudioTrack);
+      setTracks((items) => items.map((item) => trackKey(item) === key ? { ...item, lyrics: lyricsStudioDraft.trim(), hasLyrics: Boolean(lyricsStudioDraft.trim()), lyricKeywords: keywords, lyricKeywordsSource: "manual" } : item));
+      let stored: Record<string, Partial<Track>> = {};
+      try { stored = JSON.parse(localStorage.getItem("blackmamba-track-metadata") ?? "{}"); } catch { stored = {}; }
+      localStorage.setItem("blackmamba-track-metadata", JSON.stringify({ ...stored, [key]: { ...(stored[key] ?? {}), lyrics: lyricsStudioDraft.trim(), hasLyrics: Boolean(lyricsStudioDraft.trim()), lyricKeywords: keywords, lyricKeywordsSource: "manual" } }));
+      setLyricsKeywordsDraft(keywords.join(", "));
+      setLyricsStudioStatus("saved");
+    } catch {
+      setLyricsStudioStatus("error");
+    }
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -448,8 +791,7 @@ export function App() {
           }
           setTracks(
             (library.tracks as Track[]).map((item) => ({
-              ...item,
-              ...(savedMetadata[trackKey(item)] ?? {}),
+              ...mergeTrackMetadata(item, savedMetadata[trackKey(item)]),
               ...CATALOG_IDENTITY,
             })),
           );
@@ -480,6 +822,7 @@ export function App() {
 
   useEffect(() => {
     if (audio.current) audio.current.volume = volume;
+    localStorage.setItem("blackmamba-volume", String(volume));
   }, [volume]);
   useEffect(() => {
     localStorage.setItem("blackmamba-vitrine-reviews", JSON.stringify(reviews));
@@ -491,8 +834,13 @@ export function App() {
     );
   }, [playbackHistory]);
   useEffect(() => {
+    localStorage.setItem("blackmamba-playlists", JSON.stringify(playlists));
+  }, [playlists]);
+  useEffect(() => {
+    if (!ratingsReady) return;
     saveRatings(ratings);
-  }, [ratings]);
+    void fetch("/api/profile/ratings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ratings }) }).catch(() => undefined);
+  }, [ratings, ratingsReady]);
   useEffect(() => {
     if (!themeReady.current) {
       themeReady.current = true;
@@ -519,10 +867,7 @@ export function App() {
   useEffect(() => {
     if (!audio.current) return;
     audio.current.load();
-    setTime(0);
-    if (playing) audio.current.play().catch(() => setPlaying(false));
-    // Playback intent is sampled only when the selected track changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (playbackIntent.current) audio.current.play().catch(() => setPlaying(false));
   }, [current]);
   useEffect(() => {
     const selected = tracks[current];
@@ -531,7 +876,6 @@ export function App() {
       (item) => trackKey(item) === trackKey(selected),
     );
     if (index < 0) return;
-    setVisibleCount((count) => Math.max(count, index + 30));
     const frame = requestAnimationFrame(() =>
       requestAnimationFrame(() =>
         trackRows.current
@@ -545,9 +889,14 @@ export function App() {
   const toggle = () => {
     if (!audio.current) return;
     if (audio.current.paused) {
+      playbackIntent.current = true;
       recordPlayback(track);
-      audio.current.play().then(() => setPlaying(true));
+      audio.current
+        .play()
+        .then(() => setPlaying(true))
+        .catch(() => setPlaying(false));
     } else {
+      playbackIntent.current = false;
       audio.current.pause();
       setPlaying(false);
     }
@@ -559,8 +908,12 @@ export function App() {
     )
       return;
     const index = tracks.indexOf(selected);
-    if (index === current) toggle();
-    else {
+    if (index < 0) return;
+    if (index === current) {
+      if (!playing) toggle();
+      return;
+    } else {
+      playbackIntent.current = true;
       recordPlayback(selected);
       flushSync(() => {
         setCurrent(index);
@@ -572,12 +925,14 @@ export function App() {
   };
   const move = (amount: number) =>
     setCurrent((index) => {
-      if (shuffle && amount > 0 && tracks.length > 1) {
-        let next = index;
-        while (next === index) next = Math.floor(Math.random() * tracks.length);
-        return next;
+      if (!playbackQueue.length) return index;
+      const selectedKey = tracks[index] ? trackKey(tracks[index]) : "";
+      const queueIndex = Math.max(0, playbackQueue.findIndex((item) => trackKey(item) === selectedKey));
+      let nextQueueIndex = (queueIndex + amount + playbackQueue.length) % playbackQueue.length;
+      if (shuffle && amount > 0 && playbackQueue.length > 1) {
+        while (nextQueueIndex === queueIndex) nextQueueIndex = Math.floor(Math.random() * playbackQueue.length);
       }
-      return (index + amount + tracks.length) % tracks.length;
+      return tracks.findIndex((item) => trackKey(item) === trackKey(playbackQueue[nextQueueIndex]));
     });
   const seek = (amount: number) => {
     if (!audio.current) return;
@@ -586,14 +941,42 @@ export function App() {
       Math.min(audio.current.duration || 0, audio.current.currentTime + amount),
     );
     audio.current.currentTime = nextTime;
-    setTime(nextTime);
   };
   const stop = () => {
     if (!audio.current) return;
+    playbackIntent.current = false;
     audio.current.pause();
     audio.current.currentTime = 0;
-    setTime(0);
     setPlaying(false);
+  };
+  const handlePlaybackEnded = () => {
+    playbackIntent.current = true;
+    consecutivePlaybackErrors.current = 0;
+    move(1);
+  };
+  const handlePlaybackError = () => {
+    if (!playbackIntent.current || !playbackQueue.length) return;
+    consecutivePlaybackErrors.current += 1;
+    if (consecutivePlaybackErrors.current >= playbackQueue.length) {
+      playbackIntent.current = false;
+      setPlaying(false);
+      return;
+    }
+    move(1);
+  };
+  const createPlaylist = () => {
+    const name = newPlaylistName.trim();
+    if (!name) return;
+    const playlist = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name, trackKeys: [] };
+    setPlaylists((items) => [...items, playlist]);
+    setActivePlaylistId(playlist.id);
+    setPlaylistEditing(true);
+    setNewPlaylistName("");
+  };
+  const toggleTrackInActivePlaylist = (item: Track) => {
+    if (!activePlaylistId) return;
+    const key = trackKey(item);
+    setPlaylists((items) => items.map((list) => list.id !== activePlaylistId ? list : ({ ...list, trackKeys: list.trackKeys.includes(key) ? list.trackKeys.filter((value) => value !== key) : [...list.trackKeys, key] })));
   };
   const recordPlayback = (playedTrack: Track) => {
     setPlaybackHistory((history) =>
@@ -617,12 +1000,78 @@ export function App() {
     setReviewFilter("all");
     playTrack(item);
   };
-  const review = (item: Track, status: ReviewStatus) =>
+  const review = (item: Track, status: ReviewStatus) => {
+    const key = trackKey(item);
     setReviews((currentReviews) => ({
       ...currentReviews,
-      [trackKey(item)]: status,
+      [key]: status,
     }));
+    if (user) {
+      void saveUserReview(user.uid, key, status);
+    }
+  };
+  const rate = (item: Track, star: number) => {
+    const key = trackKey(item);
+    setRatings((currentRatings) => ({
+      ...currentRatings,
+      [key]: star,
+    }));
+    if (user) {
+      void saveUserRating(user.uid, key, star);
+    }
+  };
+  const toggleTrackGenre = async (item: Track, genre: (typeof GENRES)[number]) => {
+    const key = trackKey(item);
+    const previous = { tag: item.tag, genres: item.genres };
+    const currentGenres = trackGenres(item);
+    const genres = currentGenres.includes(genre) ? currentGenres.filter((value) => value !== genre) : [...currentGenres, genre];
+    const primaryGenre = genres[0] ?? "";
+    setTracks((items) => items.map((candidate) => trackKey(candidate) === key ? { ...candidate, tag: primaryGenre, genres } : candidate));
+    let stored: Record<string, Partial<Track>> = {};
+    try { stored = JSON.parse(localStorage.getItem("blackmamba-track-metadata") ?? "{}"); } catch { stored = {}; }
+    localStorage.setItem("blackmamba-track-metadata", JSON.stringify({ ...stored, [key]: { ...(stored[key] ?? {}), tag: primaryGenre, genres } }));
+    if (!item.id || item.localStatus !== "available") return;
+    try {
+      const response = await fetch(`/api/tracks/${encodeURIComponent(item.id)}/genre`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ genres }) });
+      if (!response.ok) throw new Error("genre_not_saved");
+    } catch {
+      setTracks((items) => items.map((candidate) => trackKey(candidate) === key ? { ...candidate, ...previous, warnings: [...(candidate.warnings ?? []), "No se pudieron guardar los géneros en la USB"] } : candidate));
+    }
+  };
+  const extractLyrics = async (item: Track) => {
+    const id = item.id;
+    const key = trackKey(item);
+    if (!id || ["queued", "running"].includes(lyricProgress[key]?.status)) return;
+    setLyricProgress((jobs) => ({ ...jobs, [key]: { progress: 1, message: "Iniciando", status: "running" } }));
+    try {
+      const started = await fetch(`/api/lyrics/${encodeURIComponent(id)}`, { method: "POST" });
+      if (!started.ok && started.status !== 202) throw new Error("No se pudo iniciar la extracción");
+      for (let attempt = 0; attempt < 900; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 650));
+        const response = await fetch(`/api/lyrics/${encodeURIComponent(id)}`, { cache: "no-store" });
+        if (!response.ok) throw new Error("No se pudo consultar el progreso");
+        const job = await response.json();
+        setLyricProgress((jobs) => ({ ...jobs, [key]: job }));
+        if (job.status === "error") throw new Error(job.error || "No se detectó una letra");
+        if (job.status === "done") {
+          const lyrics = String(job.lyrics || "").trim();
+          const lyricKeywords = Array.isArray(job.lyricKeywords) ? job.lyricKeywords : extractTextKeywords(lyrics);
+          setTracks((items) => items.map((candidate) => trackKey(candidate) === key ? { ...candidate, lyrics, hasLyrics: Boolean(lyrics), lyricKeywords, lyricKeywordsSource: "auto" } : candidate));
+          let stored: Record<string, Partial<Track>> = {};
+          try { stored = JSON.parse(localStorage.getItem("blackmamba-track-metadata") ?? "{}"); } catch { stored = {}; }
+          localStorage.setItem("blackmamba-track-metadata", JSON.stringify({ ...stored, [key]: { ...(stored[key] ?? {}), lyrics, hasLyrics: Boolean(lyrics), lyricKeywords, lyricKeywordsSource: "auto" } }));
+          setOpenLyrics(key);
+          return;
+        }
+      }
+      throw new Error("La extracción tardó demasiado; puedes reintentar");
+    } catch (error) {
+      setLyricProgress((jobs) => ({ ...jobs, [key]: { progress: jobs[key]?.progress ?? 0, message: error instanceof Error ? error.message : "Extracción fallida", status: "error", error: error instanceof Error ? error.message : "Extracción fallida" } }));
+    }
+  };
   const openTrackEditor = (item: Track) => {
+    setTrackSaveStatus("idle");
+    setTrackSaveMessage("");
     setEditingTrack(item);
     setEditDraft({
       title: item.title,
@@ -636,7 +1085,7 @@ export function App() {
       containsMusic: item.containsMusic ?? true,
       postAuthor: CATALOG_IDENTITY.postAuthor,
       isrc: item.isrc ?? "",
-      composer: item.composer ?? "",
+      composer: CATALOG_IDENTITY.composer,
       releaseTitle: item.releaseTitle ?? "",
       purchaseMode: item.purchaseMode ?? "link",
       purchaseUrl: item.purchaseUrl ?? "",
@@ -654,6 +1103,20 @@ export function App() {
       lyrics: item.lyrics ?? "",
       visualTheme: item.visualTheme ?? VISUAL_PRESETS.violet,
     });
+  };
+  const openRenameTrack = (item: Track) => {
+    setRenamingTrack(item);
+    setRenameDraft(item.title);
+  };
+  const saveTrackName = (target = renamingTrack) => {
+    if (!target || !renameDraft.trim()) { setRenamingTrack(null); return; }
+    const key = trackKey(target);
+    const title = renameDraft.trim();
+    setTracks((items) => items.map((item) => trackKey(item) === key ? { ...item, title } : item));
+    let stored: Record<string, Partial<Track>> = {};
+    try { stored = JSON.parse(localStorage.getItem("blackmamba-track-metadata") ?? "{}"); } catch { stored = {}; }
+    localStorage.setItem("blackmamba-track-metadata", JSON.stringify({ ...stored, [key]: { ...(stored[key] ?? {}), title } }));
+    setRenamingTrack(null);
   };
   const toggleHashtag = (hashtag: string) =>
     setEditDraft((draft) => ({
@@ -678,10 +1141,22 @@ export function App() {
         [field]: value,
       },
     }));
-  const saveTrackEditor = () => {
+  const saveTrackEditor = async () => {
     if (!editingTrack) return;
     const key = trackKey(editingTrack);
     const normalizedDraft = { ...editDraft, ...CATALOG_IDENTITY };
+    if (editingTrack.id && editingTrack.localStatus === "available") {
+      setTrackSaveStatus("saving");
+      setTrackSaveMessage("Guardando letra en la USB…");
+      try {
+        const response = await fetch(`/api/tracks/${encodeURIComponent(editingTrack.id)}/lyrics`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lyrics: normalizedDraft.lyrics ?? "" }) });
+        if (!response.ok) { const detail = await response.json().catch(() => ({})); throw new Error(detail.fallbackReason || "No se pudo guardar la letra"); }
+      } catch (error) {
+        setTrackSaveStatus("error");
+        setTrackSaveMessage(error instanceof Error ? error.message : "No se pudo guardar la letra");
+        return;
+      }
+    }
     setTracks((currentTracks) =>
       currentTracks.map((item) =>
         trackKey(item) === key
@@ -705,6 +1180,7 @@ export function App() {
       "blackmamba-track-metadata",
       JSON.stringify({ ...stored, [key]: normalizedDraft }),
     );
+    setTrackSaveStatus("idle");
     setEditingTrack(null);
   };
   const initials = (item: Track) =>
@@ -822,7 +1298,12 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.target instanceof HTMLInputElement) return;
+      if (
+        event.target instanceof HTMLElement &&
+        (event.target.matches("input, textarea, select, button") ||
+          event.target.isContentEditable)
+      )
+        return;
       if (event.code === "Space") {
         event.preventDefault();
         toggle();
@@ -830,11 +1311,9 @@ export function App() {
       if (event.code === "ArrowLeft") seek(-10);
       if (event.code === "ArrowRight") seek(10);
       if (event.code === "Escape") stop();
-      if (/^[1-5]$/.test(event.key))
-        setRatings((currentRatings) => ({
-          ...currentRatings,
-          [trackKey(track)]: Number(event.key),
-        }));
+      if (/^[1-5]$/.test(event.key)) {
+        rate(track, Number(event.key));
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -854,7 +1333,7 @@ export function App() {
       className={`dynamic-theme layout-${layout} motion-${motion}`}
       style={
         {
-          "--acid": theme.accent,
+          "--acid": ledColor,
           "--accent-2": theme.accent2,
           "--theme-surface": theme.surface,
           "--theme-glow": theme.glow,
@@ -863,6 +1342,23 @@ export function App() {
           "--theme-disc-glow": visualTheme?.discGlow ?? theme.glow,
           "--theme-button-glow": visualTheme?.buttonGlow ?? theme.accent,
           "--theme-speed": `${(visualTheme?.speed ?? 6) * 3}s`,
+          "--app-font":
+            appFont === "oswald"
+              ? 'Oswald, sans-serif'
+              : appFont === "mono"
+                ? '"Courier New", monospace'
+                : appFont === "system"
+                  ? '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+                  : '"DM Sans", sans-serif',
+          "--title-font":
+            titleFont === "oswald"
+              ? 'Oswald, sans-serif'
+              : titleFont === "mono"
+                ? '"Courier New", monospace'
+                : titleFont === "system"
+                  ? '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+                  : '"DM Sans", sans-serif',
+          "--title-font-size": `${titleFontSize}px`,
         } as React.CSSProperties
       }
     >
@@ -976,6 +1472,26 @@ export function App() {
         </div>
         <div className="library-workspace">
           <aside className="library-sidebar">
+            <div className="user-session-widget">
+              {user ? (
+                <div className="user-profile">
+                  <img src={user.photoURL || "https://www.gravatar.com/avatar/?d=mp"} alt={user.displayName || "Usuario"} className="user-avatar" />
+                  <div className="user-info">
+                    <span className="user-name">{user.displayName || "Usuario"}</span>
+                    <span className="user-email">{user.email}</span>
+                  </div>
+                  <button className="logout-btn" onClick={() => void signOut(auth)} title="Cerrar sesión">Salir</button>
+                </div>
+              ) : (
+                <div className="auth-buttons">
+                  <span className="auth-title">SINCRONIZAR BIBLIOTECA</span>
+                  <div className="auth-row">
+                    <button className="login-btn google" onClick={() => void signInWithPopup(auth, googleProvider)}>Google</button>
+                    <button className="login-btn github" onClick={() => void signInWithPopup(auth, githubProvider)}>GitHub</button>
+                  </div>
+                </div>
+              )}
+            </div>
             <span className="eyebrow">BIBLIOTECA</span>
             <button onClick={() => setReviewFilter("all")}>
               Todas <b>{tracks.length}</b>
@@ -983,27 +1499,45 @@ export function App() {
             <button onClick={() => setReviewFilter("pending")}>
               Por revisar <b>{counts.pending}</b>
             </button>
-            <button onClick={() => setReviewFilter("belongs")}>
-              Aprobadas <b>{counts.belongs}</b>
-            </button>
             <button onClick={() => setReviewFilter("reject")}>
               Rechazadas <b>{counts.reject}</b>
             </button>
             <button onClick={() => setReviewFilter("later")}>
               Más tarde <b>{counts.later}</b>
             </button>
+            <button className={showImages ? "active" : ""} onClick={() => { setShowImages((visible) => !visible); setShowWebMp3(false); setShowLyricsStudio(false); }}>
+              <ImageSquare size={16} /> Imágenes <b>{coverAssets.length}</b>
+            </button>
+            <button className={showWebMp3 ? "active" : ""} onClick={() => { setShowWebMp3((visible) => !visible); setShowImages(false); setShowLyricsStudio(false); }}>
+              <FileVideo size={16} /> Web:Mp3 <b>↗</b>
+            </button>
+            <button className={showLyricsStudio ? "active" : ""} onClick={() => { const next = !showLyricsStudio; setShowLyricsStudio(next); setShowImages(false); setShowWebMp3(false); if (next && !lyricsStudioTrack && track) openLyricsStudioTrack(track); }}>
+              <PencilSimple size={16} /> Letras <b>{sourceCounts.missingLyrics}</b>
+            </button>
+            <span className="eyebrow side-label">LISTAS</span>
+            <button className={!activePlaylist ? "active" : ""} onClick={() => { setActivePlaylistId(null); setPlaylistEditing(false); }}>Todas las canciones <b>{tracks.length}</b></button>
+            {playlists.map((list) => <div className="playlist-row" key={list.id}>
+              <button className={activePlaylistId === list.id ? "active" : ""} onClick={() => { setActivePlaylistId(list.id); setPlaylistEditing(false); }}><span>{list.name}</span><b>{list.trackKeys.length}</b></button>
+              <button className="playlist-delete" aria-label={`Borrar lista ${list.name}`} onClick={() => { setPlaylists((items) => items.filter((item) => item.id !== list.id)); if (activePlaylistId === list.id) setActivePlaylistId(null); }}>×</button>
+            </div>)}
+            <form className="playlist-create" onSubmit={(event) => { event.preventDefault(); createPlaylist(); }}>
+              <input value={newPlaylistName} onChange={(event) => setNewPlaylistName(event.target.value)} placeholder="Nueva lista…" aria-label="Nombre de lista nueva" />
+              <button type="submit" disabled={!newPlaylistName.trim()}>+</button>
+            </form>
+            {activePlaylist && <button className={playlistEditing ? "active" : ""} onClick={() => setPlaylistEditing((value) => !value)}>{playlistEditing ? "Terminar de agregar" : "+ Agregar canciones"}</button>}
             <span className="eyebrow side-label">FILTROS</span>
-            <p>Género</p>
-            <p>Duración</p>
-            <p>Calificación</p>
-            <p>Con letra</p>
+            <button className={sourceFilter === "all" ? "active" : ""} onClick={() => setSourceFilter("all")}>Todas las fuentes</button>
+            <button className={sourceFilter === "local" ? "active" : ""} onClick={() => setSourceFilter("local")}>Audio local <b>{sourceCounts.local}</b></button>
+            <button className={sourceFilter === "recoverable" ? "active" : ""} onClick={() => setSourceFilter("recoverable")}>Por recuperar <b>{sourceCounts.recoverable}</b></button>
+            <button className={sourceFilter === "missing-cover" ? "active warning" : ""} onClick={() => setSourceFilter("missing-cover")}>Sin portada <b>{sourceCounts.missingCover}</b></button>
+            <button className={sourceFilter === "missing-lyrics" ? "active warning" : ""} onClick={() => setSourceFilter("missing-lyrics")}>Sin letra <b>{sourceCounts.missingLyrics}</b></button>
             <span className="eyebrow side-label">
               REPRODUCIDAS RECIENTEMENTE
             </span>
             <div className="playback-history">
-              {playbackHistory.slice(0, 8).map((entry) => (
+              {playbackHistory.slice(0, 8).map((entry, historyIndex) => (
                 <button
-                  key={`${entry.trackKey}-${entry.playedAt}`}
+                  key={`${entry.trackKey}-${entry.playedAt}-${historyIndex}`}
                   onClick={() => playFromHistory(entry)}
                   title={new Date(entry.playedAt).toLocaleString()}
                 >
@@ -1027,7 +1561,77 @@ export function App() {
               )}
             </div>
           </aside>
-          <div className="catalog-main">
+          <div className={`catalog-main${showImages ? " show-images" : ""}${showWebMp3 ? " show-web-mp3" : ""}${showLyricsStudio ? " show-lyrics-studio" : ""}`}>
+            {showLyricsStudio && (
+              <section className="lyrics-studio" aria-label="Estudio de letras">
+                <aside>
+                  <header><span className="eyebrow">REVISIÓN HUMANA</span><strong>LETRAS</strong></header>
+                  <input value={lyricsStudioQuery} onChange={(event) => setLyricsStudioQuery(event.target.value)} placeholder="Buscar canción…" aria-label="Buscar canción para editar letra" />
+                  <div className="lyrics-studio-list">
+                    {lyricsStudioItems.slice(0, 300).map((item) => <button key={trackKey(item)} className={lyricsStudioTrack === trackKey(item) ? "active" : ""} onClick={() => openLyricsStudioTrack(item)}><span>{item.title}</span><small>{item.hasLyrics ? "CON LETRA" : "PENDIENTE"}</small></button>)}
+                  </div>
+                </aside>
+                <article>
+                  {selectedLyricsStudioTrack ? <>
+                    <header><div><span className="eyebrow">EDITANDO</span><h2>{selectedLyricsStudioTrack.title}</h2><p>{selectedLyricsStudioTrack.artist} · Puedes reproducir la canción abajo mientras corriges.</p></div><button onClick={() => playTrack(selectedLyricsStudioTrack)}><Play size={16} weight="fill" /> Reproducir</button></header>
+                    <textarea value={lyricsStudioDraft} onChange={(event) => { setLyricsStudioDraft(event.target.value); setLyricsStudioStatus("idle"); }} placeholder="Escribe o corrige la letra aquí…" spellCheck="true" />
+                    <section className="lyrics-keywords">
+                      <div><span className="eyebrow">PALABRAS CLAVE PARA IMÁGENES</span><small>Separadas por comas; se usan para recomendar portadas.</small></div>
+                      <input value={lyricsKeywordsDraft} onChange={(event) => { setLyricsKeywordsDraft(event.target.value); setLyricsStudioStatus("idle"); }} placeholder="noche, ciudad, fuego, libertad…" />
+                      <button type="button" onClick={() => { setLyricsKeywordsDraft(extractTextKeywords(lyricsStudioDraft).join(", ")); setLyricsStudioStatus("idle"); }}>Generar desde letra</button>
+                    </section>
+                    <footer><span className={lyricsStudioStatus}>{lyricsStudioStatus === "saved" ? "Guardada en USB" : lyricsStudioStatus === "error" ? "No se pudo guardar" : `${lyricsStudioDraft.trim().split(/\s+/).filter(Boolean).length} palabras`}</span><button onClick={() => void saveLyricsStudio()} disabled={lyricsStudioStatus === "saving" || selectedLyricsStudioTrack.localStatus !== "available"}>{lyricsStudioStatus === "saving" ? "Guardando…" : "Guardar letra"}</button></footer>
+                  </> : <div className="lyrics-studio-empty">Selecciona una canción.</div>}
+                </article>
+              </section>
+            )}
+            {showWebMp3 && (
+              <section className="web-mp3-panel" aria-label="Web:Mp3, extractor local de audio">
+                <div className="web-mp3-orbit" aria-hidden="true"><FileVideo size={52} weight="thin" /></div>
+                <span className="eyebrow">BM / INGEST 01</span>
+                <h2>VIDEO LOCAL<br /><em>A MP3</em></h2>
+                <p>Selecciona un video de tu Mac. BlackMamba extrae el audio localmente y deja el MP3 listo en Descargas, sin modificar el archivo original.</p>
+                <button className="web-mp3-upload" onClick={() => void extractVideoMp3()} disabled={!window.blackMambaDesktop || videoExtractStatus === "working"}>
+                  <FileVideo size={22} weight="bold" />
+                  <span>{videoExtractStatus === "working" ? "EXTRAYENDO AUDIO…" : "SELECCIONAR VIDEO"}</span>
+                  <b>↗</b>
+                </button>
+                <div className={`web-mp3-result ${videoExtractStatus}`} role="status">
+                  <span>{videoExtractStatus === "idle" ? "MP4 · MOV · MKV · WEBM · AVI · MÁX. 8 GB" : videoExtractMessage}</span>
+                </div>
+                <div className="web-mp3-facts">
+                  <span><b>LOCAL</b> El archivo no sale del Mac</span>
+                  <span><b>FFMPEG</b> Conversión MP3 en máxima calidad</span>
+                  <span><b>SALIDA</b> Downloads / Web-a-MP3</span>
+                </div>
+              </section>
+            )}
+            {showImages && (
+              <section className="cover-library" aria-label="Biblioteca de imágenes">
+                <header>
+                  <div><span className="eyebrow">BANDEJA DE PORTADAS</span><h3>{coverAssets.length} imágenes listas</h3><p>{editingImages ? "Modo edición: selecciona una o varias imágenes para eliminarlas de la bandeja." : "Elige una canción: las imágenes que coinciden con su letra aparecen primero."}</p></div>
+                  <div className="cover-header-actions">
+                    <button className={editingImages ? "editing" : ""} onClick={() => { setEditingImages((active) => !active); setSelectedImages(new Set()); setCoverMessage(""); }} aria-label={editingImages ? "Salir del modo edición" : "Editar imágenes"} title={editingImages ? "Salir del modo edición" : "Editar imágenes"}><GearSix size={17} weight="bold" /> {editingImages ? "Terminar" : "Editar"}</button>
+                    {editingImages && <button className="delete-images" disabled={!selectedImages.size} onClick={deleteSelectedImages}><Trash size={17} weight="bold" /> Eliminar {selectedImages.size || ""}</button>}
+                    <button onClick={() => setShowImages(false)}>Volver a canciones</button>
+                  </div>
+                </header>
+                {!editingImages && <div className="cover-assignment">
+                  <label>Canción destino<select value={coverTarget} onChange={(event) => setCoverTarget(event.target.value)}><option value="">Seleccionar canción…</option>{tracks.map((item) => <option key={trackKey(item)} value={trackKey(item)}>{item.title} — {item.artist}</option>)}</select></label>
+                  <button disabled={!selectedCover || !coverTarget} onClick={assignSelectedCover}>Asignar portada</button>
+                  <span>{coverMessage}</span>
+                  <label className="cover-search">Buscar por prompt o palabra clave<input value={coverSearch} onChange={(event) => setCoverSearch(event.target.value)} placeholder="noche, humo, neón…" /></label>
+                  {coverTargetTrack && <div className="target-keywords"><b>Letra:</b>{targetLyricKeywords.length ? targetLyricKeywords.map((keyword) => <i key={keyword}>{keyword}</i>) : <small>Abre Letras y genera palabras clave.</small>}</div>}
+                </div>}
+                {!editingImages && selectedCoverAsset && <section className="image-metadata-editor">
+                  <img src={selectedCoverAsset.url} alt="" />
+                  <label><span>Prompt de la imagen</span><textarea value={coverPromptDraft} onChange={(event) => { setCoverPromptDraft(event.target.value); setImageMetadataStatus("idle"); }} placeholder="Describe la escena, iluminación, personas, objetos, colores y ambiente…" /></label>
+                  <label><span>Palabras clave</span><input value={coverKeywordsDraft} onChange={(event) => { setCoverKeywordsDraft(event.target.value); setImageMetadataStatus("idle"); }} placeholder="noche, ciudad, neón, retrato…" /></label>
+                  <div><button type="button" onClick={() => setCoverKeywordsDraft(extractTextKeywords(coverPromptDraft).join(", "))}>Extraer del prompt</button><button type="button" onClick={() => void saveCoverMetadata()} disabled={imageMetadataStatus === "saving"}>{imageMetadataStatus === "saving" ? "Guardando…" : imageMetadataStatus === "saved" ? "Metadata guardada ✓" : "Guardar metadata"}</button>{imageMetadataStatus === "error" && <small>No se pudo guardar en la USB.</small>}</div>
+                </section>}
+                {(["square", "panoramic", "other"] as CoverKind[]).map((kind) => coverGroups[kind].length ? <section className={`cover-format-group ${kind}`} key={kind}><header><div><span className="eyebrow">{kind === "square" ? "FORMATO 1:1" : kind === "panoramic" ? "FORMATO PANORÁMICO" : "OTROS FORMATOS"}</span><h4>{kind === "square" ? "Portadas cuadradas" : kind === "panoramic" ? "Portadas horizontales" : "Imágenes por revisar"}</h4></div><b>{coverGroups[kind].length}</b></header><div className="cover-grid">{coverGroups[kind].map((asset) => { const match = keywordMatch(targetLyricKeywords, [...(asset.keywords ?? []), ...extractTextKeywords(asset.prompt ?? "")]); return <button key={asset.file} className={(editingImages ? selectedImages.has(asset.file) : selectedCover === asset.file) ? "selected" : ""} onClick={() => { if (editingImages) setSelectedImages((current) => { const next = new Set(current); if (next.has(asset.file)) next.delete(asset.file); else next.add(asset.file); return next; }); else setSelectedCover(asset.file); setCoverMessage(""); }} aria-pressed={editingImages ? selectedImages.has(asset.file) : selectedCover === asset.file} title={asset.prompt || asset.origins?.[0]?.path || asset.originalName}><img src={asset.url} alt={asset.prompt || asset.originalName} loading="lazy" />{editingImages && <i className="selection-check">✓</i>}{!editingImages && match.matches.length > 0 && <i className="match-badge">{match.matches.length} match</i>}<span>{asset.width && asset.height ? `${asset.width}×${asset.height} · ` : ""}{asset.keywords?.length ? asset.keywords.slice(0, 3).join(" · ") : asset.originalName}</span></button>; })}</div></section> : null)}
+              </section>
+            )}
             <div className="review-toolbar" aria-label="Filtros de revisión">
               <label className="rating-sort">
                 <span>Ordenar</span>
@@ -1063,12 +1667,6 @@ export function App() {
                 Pendientes <b>{counts.pending}</b>
               </button>
               <button
-                className={reviewFilter === "belongs" ? "selected" : ""}
-                onClick={() => setReviewFilter("belongs")}
-              >
-                Sí pertenecen <b>{counts.belongs}</b>
-              </button>
-              <button
                 className={reviewFilter === "reject" ? "selected" : ""}
                 onClick={() => setReviewFilter("reject")}
               >
@@ -1095,24 +1693,18 @@ export function App() {
                     if (node) trackRows.current.set(trackKey(item), node);
                     else trackRows.current.delete(trackKey(item));
                   }}
-                  className={`track-row ${item === track ? "active" : ""} review-${reviews[trackKey(item)] ?? "pending"}`}
+                  className={`track-row ${item === track ? "active" : ""} ${item === track && playing ? "is-playing" : ""} review-${reviews[trackKey(item)] ?? "pending"}`}
                   key={trackKey(item)}
                   title={item.warnings?.join(" · ")}
                   data-recoverable={item.localStatus === "recoverable" ? "true" : undefined}
                   style={{ animation: `row-in 0.26s ease-out ${Math.min(visibleIndex * 10, 260)}ms both` }}
                 >
-                  <button
-                    className="track-main"
-                    onClick={() => {
-                      playTrack(item);
-                      openTrackEditor(item);
-                    }}
-                  >
+                  <div className="track-main" onClick={() => playTrack(item)}>
                     <span
                       className="track-number"
                       aria-label={`Canción número ${tracks.indexOf(item) + 1}`}
                     >
-                      {tracks.indexOf(item) + 1}
+                      {(trackIndexByKey.get(trackKey(item)) ?? -1) + 1}
                     </span>
                     <span
                       className="track-art"
@@ -1127,96 +1719,63 @@ export function App() {
                       ) : (
                         initials(item)
                       )}
-                    </span>
-                    <span className="row-play">
-                      {item.localStatus === "recoverable"
-                        ? "↪"
-                        : item === track && playing
-                          ? "Ⅱ"
-                          : "▶"}
+                      <span className="art-play" aria-hidden="true">
+                        {item.localStatus === "recoverable" ? (
+                          "↪"
+                        ) : item === track && playing ? (
+                          <Pause size={15} weight="fill" />
+                        ) : (
+                          <Play size={15} weight="fill" />
+                        )}
+                      </span>
                     </span>
                     <span className="track-title">
-                      <strong>{item.title}</strong>
+                      {renamingTrack && trackKey(renamingTrack) === trackKey(item) ? (
+                        <input autoFocus className="inline-title-edit" value={renameDraft} maxLength={180}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => setRenameDraft(event.target.value)}
+                          onKeyDown={(event) => { if (event.key === "Enter") saveTrackName(item); if (event.key === "Escape") setRenamingTrack(null); }}
+                          onBlur={() => saveTrackName(item)} />
+                      ) : (
+                        <span className="title-wrapper"><strong>{item.title}</strong><button className="inline-edit-btn" onClick={(event) => { event.stopPropagation(); openRenameTrack(item); }} aria-label={`Editar nombre de ${item.title}`} title="Editar nombre"><PencilSimple size={12} /></button></span>
+                      )}
                       <small>{item.artist}</small>
+                      <small className="track-duration">{item.duration}</small>
                       {!!item.hashtags?.length && (
                         <small className="track-hashtags">
                           {item.hashtags.join(" ")}
                         </small>
                       )}
-                      <small
-                        className="track-availability"
-                        data-status={
-                          item.localStatus === "recoverable"
-                            ? "recoverable"
-                            : item.streamUrl
-                              ? "stream"
-                              : "local"
-                        }
-                      >
-                        {availabilityLabel(item)}
-                      </small>
                     </span>
-                    <span className="tag">
-                      {reviews[trackKey(item)] === "belongs"
-                        ? "Sí pertenece"
-                        : reviews[trackKey(item)] === "reject"
-                          ? "No pertenece"
-                          : reviews[trackKey(item)] === "later"
-                            ? "Después"
-                            : item.tag}
-                    </span>
-                    <time>{item.duration}</time>
-                  </button>
+                  </div>
                   <div
                     className="review-actions"
                     aria-label={`Revisar ${item.title}`}
                   >
-                    <div
-                      className="star-rating"
-                      role="group"
-                      aria-label={`Calificación de ${item.title}`}
-                    >
-                      {[1, 2, 3, 4, 5].map((star) => (
-                        <button
-                          key={star}
-                          className={
-                            star <= (ratings[trackKey(item)] ?? 0)
-                              ? "filled"
-                              : ""
-                          }
-                          onClick={() =>
-                            setRatings((currentRatings) => ({
-                              ...currentRatings,
-                              [trackKey(item)]: star,
-                            }))
-                          }
-                          aria-label={`${star} ${star === 1 ? "estrella" : "estrellas"}`}
-                          aria-pressed={ratings[trackKey(item)] === star}
-                        >
-                          ★
-                        </button>
-                      ))}
+                    <div className="ratings-and-genres">
+                      <div className="star-rating" role="group" aria-label={`Calificación de ${item.title}`}>
+                        {[1, 2, 3, 4, 5].map((star) => <button key={star} className={star <= (ratings[trackKey(item)] ?? 0) ? "filled" : ""} onClick={() => rate(item, star)} aria-label={`${star} ${star === 1 ? "estrella" : "estrellas"}`} aria-pressed={ratings[trackKey(item)] === star}>★</button>)}
+                      </div>
+                      <div className="genre-picker" role="group" aria-label={`Géneros de ${item.title}`}>
+                        {GENRES.map((genre) => {
+                          const selected = trackGenres(item).includes(genre);
+                          return <button key={genre} style={{ "--genre-color": GENRE_COLORS[genre] } as CSSProperties} className={selected ? "selected" : ""} onClick={() => void toggleTrackGenre(item, genre)} aria-pressed={selected}>{genre}</button>;
+                        })}
+                      </div>
                     </div>
+                    {activePlaylist && <button className={activePlaylistKeys.has(trackKey(item)) ? "playlist-toggle chosen" : "playlist-toggle"} onClick={() => toggleTrackInActivePlaylist(item)}>{activePlaylistKeys.has(trackKey(item)) ? "En lista ✓" : "+ Lista"}</button>}
                     <button
-                      className="lyrics-toggle"
-                      onClick={() =>
-                        setOpenLyrics(
-                          openLyrics === trackKey(item) ? null : trackKey(item),
-                        )
-                      }
+                      className={`lyrics-toggle ${item.hasLyrics ? "has-lyrics" : ""}`}
+                      onClick={() => item.hasLyrics ? setOpenLyrics(openLyrics === trackKey(item) ? null : trackKey(item)) : void extractLyrics(item)}
                       aria-expanded={openLyrics === trackKey(item)}
+                      aria-busy={["queued", "running"].includes(lyricProgress[trackKey(item)]?.status)}
                       aria-label={`Letra de ${item.title}`}
                     >
-                      {item.hasLyrics ? "Letra" : "Sin letra"}
-                    </button>
-                    <button
-                      className={
-                        reviews[trackKey(item)] === "belongs" ? "chosen" : ""
-                      }
-                      onClick={() => review(item, "belongs")}
-                      aria-label="Sí pertenece"
-                    >
-                      ✓
+                      {["queued", "running"].includes(lyricProgress[trackKey(item)]?.status)
+                        ? lyricProgress[trackKey(item)]?.status === "queued" ? "En cola" : `${Math.round(lyricProgress[trackKey(item)].progress)}%`
+                        : lyricProgress[trackKey(item)]?.status === "error"
+                          ? "Reintentar"
+                          : item.hasLyrics ? "Letra ✓" : "Letra"}
                     </button>
                     <button
                       className={
@@ -1291,9 +1850,11 @@ export function App() {
               <span>
                 Estado{" "}
                 <b>
-                  {reviews[trackKey(track)] === "belongs"
-                    ? "Aprobada"
-                    : "Por revisar"}
+                  {reviews[trackKey(track)] === "reject"
+                    ? "No pertenece"
+                    : reviews[trackKey(track)] === "later"
+                      ? "Después"
+                      : "Por revisar"}
                 </b>
               </span>
               <span>
@@ -1304,7 +1865,6 @@ export function App() {
               </span>
             </div>
             <div className="inspector-actions">
-              <button onClick={() => review(track, "belongs")}>Aprobar</button>
               <button onClick={() => review(track, "reject")}>Rechazar</button>
               <button onClick={() => review(track, "later")}>Más tarde</button>
               <button onClick={() => openTrackEditor(track)}>Editar letra / info</button>
@@ -1518,15 +2078,11 @@ export function App() {
                 />
               </label>
               <label>
-                Categoría
+                Géneros
                 <input
-                  value={editDraft.tag ?? ""}
-                  onChange={(event) =>
-                    setEditDraft((draft) => ({
-                      ...draft,
-                      tag: event.target.value,
-                    }))
-                  }
+                  value={trackGenres(editDraft as Track).join(", ")}
+                  readOnly
+                  title="Se editan directamente desde los botones de colores"
                 />
               </label>
               <label>
@@ -1832,11 +2388,11 @@ export function App() {
               </label>
             </div>
             <footer>
-              <span>Los cambios se guardan localmente para esta canción.</span>
+              <span className={trackSaveStatus === "error" ? "save-error" : ""}>{trackSaveMessage || "La letra se guarda en la USB; los demás cambios permanecen locales."}</span>
               <div>
                 <button onClick={() => setEditingTrack(null)}>Cancelar</button>
-                <button className="save-track" onClick={saveTrackEditor}>
-                  Guardar cambios
+                <button className="save-track" onClick={() => void saveTrackEditor()} disabled={trackSaveStatus === "saving"}>
+                  {trackSaveStatus === "saving" ? "Guardando…" : "Guardar cambios"}
                 </button>
               </div>
             </footer>
@@ -1844,24 +2400,37 @@ export function App() {
         </div>
       )}
 
-      <div className="player" aria-label="Reproductor de música">
+      <div className={`player${playing ? " is-playing" : ""}`} aria-label="Reproductor de música">
+        <button
+          className="visual-settings-toggle"
+          onClick={() => setSettingsOpen((open) => !open)}
+          aria-label="Configuración visual"
+          aria-expanded={settingsOpen}
+          title="Configuración visual"
+        >
+          <GearSix size={16} weight="bold" />
+        </button>
+        {layout === "winamp" && (
+          <button className="compact-exit" onClick={() => setLayout("combined")} aria-label="Salir de Winamp Classic" title="Volver a la biblioteca completa">
+            <CornersOut size={15} weight="bold" />
+          </button>
+        )}
         <audio
           ref={audio}
           src={track.streamUrl || track.file}
           preload="metadata"
-          onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
-          onEnded={() => move(1)}
-          onPlay={() => setPlaying(true)}
+          onEnded={handlePlaybackEnded}
+          onError={handlePlaybackError}
+          onPlay={() => { consecutivePlaybackErrors.current = 0; setPlaying(true); }}
           onPause={() => setPlaying(false)}
         />
-        <div className={`cover${playing ? " cover-playing" : ""}`}>
+        <button className={`cover player-cover-picker${playing ? " cover-playing" : ""}`} onClick={openCurrentCoverLibrary} aria-label={`Elegir portada para ${track.title}`} title="Cambiar portada desde la biblioteca">
           {track.cover ? (
             <img src={track.cover} alt={`Portada de ${track.title}`} />
           ) : (
             initials(track)
           )}
-        </div>
+        </button>
         <div className="now">
           <strong>{track.title}</strong>
           <small>{track.artist}</small>
@@ -1876,12 +2445,7 @@ export function App() {
                 className={
                   star <= (ratings[trackKey(track)] ?? 0) ? "filled" : ""
                 }
-                onClick={() =>
-                  setRatings((currentRatings) => ({
-                    ...currentRatings,
-                    [trackKey(track)]: star,
-                  }))
-                }
+                onClick={() => rate(track, star)}
                 aria-label={`${star} ${star === 1 ? "estrella" : "estrellas"}`}
                 aria-pressed={ratings[trackKey(track)] === star}
               >
@@ -1892,9 +2456,10 @@ export function App() {
         </div>
         <AudioVisualizer
           active={playing && motion !== "off"}
-          color={theme.accent}
+          color={ledColor}
           reduced={motion === "reduced"}
           type={layout === "winamp" ? "sine" : "bar"}
+          audioRef={audio}
         />
         <div className="transport">
           <div className="controls">
@@ -1924,6 +2489,15 @@ export function App() {
               title="Canción anterior"
             >
               <SkipBack size={22} weight="bold" />
+            </button>
+            <button
+              className={`video-to-mp3 ${videoExtractStatus === "working" ? "working" : ""}`}
+              onClick={() => void extractVideoMp3()}
+              disabled={!window.blackMambaDesktop || videoExtractStatus === "working"}
+              aria-label="Extraer MP3 de un video"
+              title="Video a MP3"
+            >
+              <FileVideo size={20} weight="bold" />
             </button>
             <button
               onClick={() => seek(-10)}
@@ -1963,62 +2537,128 @@ export function App() {
               <SkipForward size={22} weight="bold" />
             </button>
           </div>
-          <div className="timeline">
-            <span>{formatTime(time)}</span>
+          {videoExtractMessage && (
+            <div className={`video-extract-status ${videoExtractStatus}`} role="status">
+              {videoExtractMessage}
+              {videoExtractStatus !== "working" && <button onClick={() => { setVideoExtractStatus("idle"); setVideoExtractMessage(""); }} aria-label="Cerrar aviso">×</button>}
+            </div>
+          )}
+          <PlaybackTimeline audioRef={audio} current={current} />
+        </div>
+        <label className="volume volume-knob-control">
+          <span>VOL</span>
+          <span
+            className="knob-shell"
+            style={{ "--knob-angle": `${-135 + volume * 270}deg` } as React.CSSProperties}
+            onWheel={(event) => {
+              event.preventDefault();
+              const direction = event.deltaY < 0 ? 1 : -1;
+              setVolume((currentVolume) =>
+                Math.min(1, Math.max(0, Number((currentVolume + direction * 0.05).toFixed(2)))),
+              );
+            }}
+            title="Gira con la rueda del mouse"
+          >
+            <span className="knob-indicator" />
             <input
-              aria-label="Línea de tiempo de la canción"
+              aria-label={`Volumen ${Math.round(volume * 100)}%`}
               type="range"
               min="0"
-              max={duration || 0}
-              step="0.1"
-              value={time}
-              style={
-                {
-                  "--progress": `${duration ? (time / duration) * 100 : 0}%`,
-                } as React.CSSProperties
-              }
-              onChange={(e) => {
-                if (audio.current)
-                  audio.current.currentTime = Number(e.target.value);
-                setTime(Number(e.target.value));
-              }}
+              max="1"
+              step="0.01"
+              value={volume}
+              onChange={(e) => setVolume(Number(e.target.value))}
             />
-            <span>−{formatTime(Math.max(0, duration - time))}</span>
-          </div>
-        </div>
-        <label className="volume">
-          VOL
-          <input
-            aria-label="Volumen"
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={volume}
-            onChange={(e) => setVolume(Number(e.target.value))}
-          />
+          </span>
+          <output>{Math.round(volume * 100)}</output>
         </label>
         <div className="motion-mode" aria-label="Modo de movimiento">
           <button
             className={motion === "full" ? "active" : ""}
             onClick={() => setMotion("full")}
+            aria-label="Movimiento completo"
+            title="Movimiento completo"
           >
-            Completo
+            <WaveSine size={15} weight="bold" />
           </button>
           <button
             className={motion === "reduced" ? "active" : ""}
             onClick={() => setMotion("reduced")}
+            aria-label="Movimiento reducido"
+            title="Movimiento reducido"
           >
-            Reducido
+            <Gauge size={15} weight="bold" />
           </button>
           <button
             className={motion === "off" ? "active" : ""}
             onClick={() => setMotion("off")}
+            aria-label="Movimiento desactivado"
+            title="Movimiento desactivado"
           >
-            Off
+            <Power size={15} weight="bold" />
           </button>
         </div>
+        {settingsOpen && (
+          <section className="visual-settings" aria-label="Configuración visual">
+            <header>
+              <strong>Configuración visual</strong>
+              <button onClick={() => setSettingsOpen(false)} aria-label="Cerrar configuración">×</button>
+            </header>
+            <label>
+              Tipografía de la aplicación
+              <select value={appFont} onChange={(event) => setAppFont(event.target.value as AppFont)}>
+                <option value="dm-sans">DM Sans</option>
+                <option value="oswald">Oswald</option>
+                <option value="mono">Terminal / Mono</option>
+                <option value="system">Sistema</option>
+              </select>
+            </label>
+            <label>
+              Fuente de nombres y canciones
+              <select value={titleFont} onChange={(event) => setTitleFont(event.target.value as AppFont)}>
+                <option value="oswald">Oswald</option>
+                <option value="dm-sans">DM Sans</option>
+                <option value="mono">Terminal / Mono</option>
+                <option value="system">Sistema</option>
+              </select>
+            </label>
+            <label>
+              Tamaño de nombres <output>{titleFontSize}px</output>
+              <input
+                className="font-size-control"
+                type="range"
+                min="12"
+                max="32"
+                step="1"
+                value={titleFontSize}
+                onChange={(event) => setTitleFontSize(Number(event.target.value))}
+                aria-label="Tamaño de nombres de canciones"
+              />
+              <strong className="font-preview">BlackMamba · Nombre de canción</strong>
+            </label>
+            <label>
+              Color de LEDs y acentos
+              <span className="color-editor">
+                <input type="color" value={ledColor} onChange={(event) => setLedColor(event.target.value)} aria-label="Elegir color LED" />
+                <code>{ledColor.toUpperCase()}</code>
+              </span>
+            </label>
+            <div className="color-presets" aria-label="Colores rápidos">
+              {["#32f5ff", "#a855f7", "#ff3da8", "#ff5a4f", "#55f28c", "#f4f4f5"].map((color) => (
+                <button key={color} style={{ backgroundColor: color }} onClick={() => setLedColor(color)} aria-label={`Usar color ${color}`} aria-pressed={ledColor === color} />
+              ))}
+            </div>
+          </section>
+        )}
       </div>
+      <aside className="page-jump-controls" aria-label="Navegación vertical">
+        <button type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })} aria-label="Ir hasta arriba" title="Ir hasta arriba">
+          <span aria-hidden="true">↑</span><small>Arriba</small>
+        </button>
+        <button type="button" onClick={() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" })} aria-label="Ir hasta abajo" title="Ir hasta abajo">
+          <span aria-hidden="true">↓</span><small>Abajo</small>
+        </button>
+      </aside>
     </main>
   );
 }

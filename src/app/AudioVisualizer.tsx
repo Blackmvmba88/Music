@@ -1,21 +1,24 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 
 const BAR_COUNT = 36;
 // Pre-generate stable random parameters so bars don't change on re-render
 const BAR_PHASES = Array.from({ length: BAR_COUNT }, () => Math.random() * Math.PI * 2);
 const BAR_SPEEDS = Array.from({ length: BAR_COUNT }, () => 0.025 + Math.random() * 0.04);
 const BAR_BASE   = Array.from({ length: BAR_COUNT }, () => 0.1 + Math.random() * 0.2);
+const AUDIO_ANALYSERS = new WeakMap<HTMLMediaElement, { context: AudioContext; analyser: AnalyserNode }>();
 
 export function AudioVisualizer({
   active,
   color,
   reduced = false,
   type = 'bar',
+  audioRef,
 }: {
   active: boolean;
   color: string;
   reduced?: boolean;
   type?: 'bar' | 'sine';
+  audioRef?: RefObject<HTMLAudioElement | null>;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -27,6 +30,37 @@ export function AudioVisualizer({
 
     let frame = 0;
     let rafId = 0;
+    let analyser: AnalyserNode | null = null;
+    let frequencyData: Uint8Array<ArrayBuffer> | null = null;
+    let audioContext: AudioContext | null = null;
+    const media = audioRef?.current;
+    if (media) {
+      try {
+        let graph = AUDIO_ANALYSERS.get(media);
+        if (!graph) {
+          const context = new AudioContext();
+          const source = context.createMediaElementSource(media);
+          const node = context.createAnalyser();
+          node.fftSize = 256;
+          node.smoothingTimeConstant = 0.58;
+          source.connect(node);
+          node.connect(context.destination);
+          graph = { context, analyser: node };
+          AUDIO_ANALYSERS.set(media, graph);
+        }
+        analyser = graph.analyser;
+        audioContext = graph.context;
+        frequencyData = new Uint8Array(analyser.frequencyBinCount);
+        if (active && graph.context.state === 'suspended') void graph.context.resume();
+      } catch {
+        analyser = null;
+      }
+    }
+    const resumeAudioGraph = () => {
+      if (audioContext?.state === 'suspended') void audioContext.resume();
+    };
+    window.addEventListener('pointerdown', resumeAudioGraph, { passive: true });
+    window.addEventListener('keydown', resumeAudioGraph);
 
     const draw = () => {
       const dpr = window.devicePixelRatio || 1;
@@ -45,28 +79,48 @@ export function AudioVisualizer({
       ctx.clearRect(0, 0, w, h);
 
       if (type === 'sine') {
-        // --- Winamp Sinusoidal Mode ---
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2.2;
-        ctx.shadowBlur = active ? 6 : 0;
-        ctx.shadowColor = color;
-        ctx.globalAlpha = active ? 0.95 : 0.25;
+        // --- Segmented vertical channel meter (no lateral snake motion) ---
+        ctx.fillStyle = '#020402';
+        ctx.fillRect(0, 0, w, h);
+        const channelWidth = 13;
+        const cellY = 6;
+        const rows = Math.max(1, Math.floor((h - 6) / cellY));
+        const columns = Math.max(1, Math.floor((w - 6) / channelWidth));
+        const speed = frame * (reduced ? 0.055 : 0.16);
+        if (active && analyser && frequencyData) analyser.getByteFrequencyData(frequencyData);
 
-        ctx.beginPath();
-        const midY = h / 2;
-        const amplitude = active ? h * 0.45 : 3;
+        for (let column = 0; column < columns; column++) {
+          const x = 6 + column * channelWidth;
+          const phase = column * 1.17;
+          const fastPulse = Math.abs(Math.sin(speed + phase));
+          const transient = Math.pow(Math.abs(Math.sin(speed * 1.83 + phase * 2.31)), 3);
+          const pulse = fastPulse * 0.58 + transient * 0.42;
+          const bin = frequencyData
+            ? Math.min(frequencyData.length - 1, Math.floor((column / columns) * frequencyData.length * 0.72))
+            : 0;
+          const audioEnergy = frequencyData ? frequencyData[bin] / 255 : 0;
+          const reactiveLevel = Math.min(1, Math.pow(audioEnergy, 0.68) * 1.24);
+          const level = active
+            ? analyser && frequencyData
+              ? 0.035 + reactiveLevel * 0.95
+              : 0.08 + pulse * 0.9
+            : 0.045;
+          const litRows = Math.max(1, Math.round(level * rows));
 
-        for (let x = 0; x < w; x++) {
-          const t = x * 0.05 - frame * 0.12;
-          const y = midY + Math.sin(t) * Math.cos(x * 0.01 + frame * 0.02) * amplitude;
-          if (x === 0) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
+          for (let row = 0; row < rows; row++) {
+            const y = h - 4 - row * cellY;
+            const on = row < litRows;
+            const peak = active && row === litRows;
+            ctx.beginPath();
+            ctx.roundRect(x, y - 2, 7, 3.2, 1.2);
+            ctx.fillStyle = color;
+            ctx.globalAlpha = on ? (0.44 + (row / rows) * 0.54) : peak ? 0.28 : 0.045;
+            ctx.shadowColor = color;
+            ctx.shadowBlur = on && active ? 3.5 : 0;
+            ctx.fill();
           }
         }
-        ctx.stroke();
-        ctx.shadowBlur = 0; // Reset
+        ctx.shadowBlur = 0;
       } else {
         // --- Spotify Spectrum Bar Mode ---
         const gap  = 2;
@@ -107,13 +161,17 @@ export function AudioVisualizer({
         }
       }
 
-      frame += reduced ? 0.35 : 1;
+      frame += reduced ? 0.6 : 1;
       if (!document.hidden) rafId = requestAnimationFrame(draw);
     };
 
     draw();
-    return () => cancelAnimationFrame(rafId);
-  }, [active, color, reduced, type]);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('pointerdown', resumeAudioGraph);
+      window.removeEventListener('keydown', resumeAudioGraph);
+    };
+  }, [active, audioRef, color, reduced, type]);
 
   return (
     <canvas

@@ -20,11 +20,15 @@ Cada fase se considera terminada sólo con implementación y validación verific
 - Orden por catálogo y calificación.
 - Búsqueda normalizada y filtros de revisión.
 - Historial persistente de reproducción.
+- Calificaciones persistentes en navegador y backend local.
+- Edición de nombre directamente en la lista y filtros operativos de completitud.
 - Cuatro layouts y animaciones configurables.
 - Temas visuales individuales por canción con presets Sunset, Dawn, Violet y Ember.
 - Portadas 1:1 y 16:9.
 - Editor de letra, hashtags y metadatos de SoundCloud.
 - DMG privado sin MP3 ni WAV.
+- Sección lateral `Web:Mp3` con panel integrado y botón directo en los controles de transporte de Electron.
+- Selector nativo, conversión con `ffmpeg`, estados estructurados y apertura del resultado en Finder.
 
 ## 0.3 — Persistencia canónica de metadatos · siguiente
 
@@ -34,12 +38,14 @@ Cada fase se considera terminada sólo con implementación y validación verific
 - Guardar calificaciones, hashtags, letras, ISRC, ISWC, álbum y lanzamiento.
 - Resolver conflictos entre WebUI, manifiesto USB y metadatos embebidos.
 - Copia de seguridad antes de cada migración.
+- Conectar la bandeja `Web-a-MP3` al pipeline de fingerprint, deduplicación y aprobación antes de importar.
 
 Criterio de salida: editar una canción, reiniciar en otro dispositivo con la misma USB y recuperar todos los campos sin depender del navegador original.
 
 ## 0.4 — Catálogo remoto y disponibilidad
 
-- Completar cotejo SoundCloud ↔ Suno ↔ USB.
+- [x] Cotejar SoundCloud ↔ USB con identidad, duración, confianza y reporte reproducible.
+- Resolver manualmente las coincidencias SoundCloud ambiguas; nunca aplicarlas sólo por título.
 - Marcar claramente `local`, `stream`, `recuperar desde Suno`, `recuperar desde SoundCloud`, `MP3` y `WAV`.
 - Descargar desde Suno únicamente con coincidencia validada por título y duración.
 - Extraer de Suno la letra disponible, portada y metadatos sin confundir estilo con letra.
@@ -51,7 +57,10 @@ Criterio de salida: cada registro muestra evidencia de su fuente y toda canción
 
 ## 0.5 — Portadas y letras
 
-- Cotejo asistido de imágenes de `00_COVER_INBOX`.
+- Cotejo asistido de imágenes de `00_COVER_INBOX` mediante prompts, etiquetas y ranking semántico local.
+- Clasificación local con Vision de macOS y edición manual de prompt y palabras clave.
+- Extracción automática y edición de palabras clave de letras con persistencia canónica.
+- [x] Extracción local en dos pasadas, cola de un solo trabajo y estado explícito para pistas sin voz detectable.
 - Validación visual antes de asignar portada.
 - Variantes cuadrada y panorámica por canción.
 - Importación y edición de letras con control de versión.

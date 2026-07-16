@@ -13,6 +13,7 @@ export default tseslint.config(
       "node_modules",
       "public/player",
       ".venv",
+      ".venv-*",
     ],
   },
   js.configs.recommended,
