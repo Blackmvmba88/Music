@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('blackMambaDesktop', {
   platform: process.platform,
+  setCompactMode: (compact) => ipcRenderer.invoke('set-compact-mode', Boolean(compact)),
+  extractVideoMp3: () => ipcRenderer.invoke('extract-video-mp3'),
   onTransport: (callback) => {
     const listener = (_event, action) => callback(action);
     ipcRenderer.on('transport', listener);

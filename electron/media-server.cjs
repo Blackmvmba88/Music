@@ -2,6 +2,8 @@ const http = require("node:http");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
+const { extractTextKeywords, sanitizeKeywords } = require("./metadata-keywords.cjs");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -12,6 +14,8 @@ const MIME = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
 };
@@ -42,6 +46,109 @@ const sanitizeRatings = (value) => {
   }
   return ratings;
 };
+const atomicWrite = async (target, content) => {
+  const temporary = `${target}.tmp-${process.pid}-${Date.now()}`;
+  await fsp.writeFile(temporary, content);
+  await fsp.rename(temporary, target);
+};
+const imageDimensionsCache = new Map();
+async function readImageDimensions(file) {
+  if (imageDimensionsCache.has(file)) return imageDimensionsCache.get(file);
+  const handle = await fsp.open(file, "r");
+  try {
+    const buffer = Buffer.alloc(131072);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const data = buffer.subarray(0, bytesRead);
+    let size = null;
+    if (data.length >= 24 && data.toString("ascii", 1, 4) === "PNG")
+      size = { width: data.readUInt32BE(16), height: data.readUInt32BE(20) };
+    else if (data[0] === 0xff && data[1] === 0xd8) {
+      for (let offset = 2; offset + 9 < data.length;) {
+        if (data[offset] !== 0xff) { offset += 1; continue; }
+        const marker = data[offset + 1];
+        const length = data.readUInt16BE(offset + 2);
+        if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+          size = { width: data.readUInt16BE(offset + 7), height: data.readUInt16BE(offset + 5) };
+          break;
+        }
+        offset += Math.max(2, length + 2);
+      }
+    }
+    imageDimensionsCache.set(file, size);
+    return size;
+  } finally { await handle.close(); }
+}
+async function canonicalTrack(root, trackId) {
+  if (!root) throw new Error("usb_not_available");
+  const manifestPath = path.join(root, "library.json");
+  const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
+  const item = (manifest.tracks || []).find((track) => track.id === trackId);
+  if (!item) throw new Error("track_not_found");
+  const folder = path.resolve(root, item.folder);
+  if (!folder.startsWith(`${path.resolve(root)}${path.sep}`)) throw new Error("invalid_track_folder");
+  const metadataPath = path.join(folder, "metadata.json");
+  let metadata = { ...item };
+  try { metadata = { ...metadata, ...JSON.parse(await fsp.readFile(metadataPath, "utf8")) }; } catch {}
+  return { manifestPath, manifest, item, folder, metadataPath, metadata };
+}
+async function persistTrackLyrics(root, runtimeCatalog, trackId, rawLyrics) {
+  const lyrics = String(rawLyrics ?? "").trim();
+  if (lyrics.length > 500_000) throw new Error("lyrics_too_large");
+  const state = await canonicalTrack(root, trackId);
+  const lyricsName = path.basename(state.item.lyrics || "lyrics.txt");
+  const lyricsPath = path.join(state.folder, lyricsName);
+  const lyricKeywords = extractTextKeywords(lyrics);
+  const lyricsUpdatedAt = new Date().toISOString();
+  Object.assign(state.item, { lyrics: lyricsName, hasLyrics: Boolean(lyrics), lyricKeywords, lyricKeywordsSource: "auto", lyricsUpdatedAt });
+  Object.assign(state.metadata, { lyrics: lyricsName, hasLyrics: Boolean(lyrics), lyricKeywords, lyricKeywordsSource: "auto", lyricsUpdatedAt });
+  await atomicWrite(lyricsPath, lyrics ? `${lyrics}\n` : "");
+  await atomicWrite(state.metadataPath, `${JSON.stringify(state.metadata, null, 2)}\n`);
+  await atomicWrite(state.manifestPath, `${JSON.stringify(state.manifest, null, 2)}\n`);
+  const runtimeTrack = runtimeCatalog?.tracks.find((track) => track.id === trackId);
+  if (runtimeTrack) Object.assign(runtimeTrack, { lyrics, hasLyrics: Boolean(lyrics), lyricKeywords, lyricKeywordsSource: "auto" });
+  return { lyrics, hasLyrics: Boolean(lyrics), lyricKeywords, evidence: [lyricsPath, state.metadataPath, state.manifestPath] };
+}
+async function persistTrackKeywords(root, runtimeCatalog, trackId, rawKeywords) {
+  const state = await canonicalTrack(root, trackId);
+  const lyricKeywords = sanitizeKeywords(rawKeywords);
+  const lyricKeywordsUpdatedAt = new Date().toISOString();
+  Object.assign(state.item, { lyricKeywords, lyricKeywordsSource: "manual", lyricKeywordsUpdatedAt });
+  Object.assign(state.metadata, { lyricKeywords, lyricKeywordsSource: "manual", lyricKeywordsUpdatedAt });
+  await atomicWrite(state.metadataPath, `${JSON.stringify(state.metadata, null, 2)}\n`);
+  await atomicWrite(state.manifestPath, `${JSON.stringify(state.manifest, null, 2)}\n`);
+  const runtimeTrack = runtimeCatalog?.tracks.find((track) => track.id === trackId);
+  if (runtimeTrack) Object.assign(runtimeTrack, { lyricKeywords, lyricKeywordsSource: "manual" });
+  return { lyricKeywords, evidence: [state.metadataPath, state.manifestPath] };
+}
+async function persistCoverMetadata(root, imageFile, rawPrompt, rawKeywords) {
+  if (!root) throw new Error("usb_not_available");
+  const file = path.basename(String(imageFile || ""));
+  const prompt = String(rawPrompt || "").trim().slice(0, 4000);
+  const keywords = sanitizeKeywords(rawKeywords?.length ? rawKeywords : extractTextKeywords(prompt));
+  const manifestPath = path.join(root, "00_COVER_INBOX", "images.json");
+  const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
+  const image = (manifest.images || []).find((item) => item.file === file);
+  if (!image) throw new Error("image_not_found");
+  Object.assign(image, { prompt, keywords, promptSource: "manual", metadataUpdatedAt: new Date().toISOString() });
+  manifest.updatedAt = image.metadataUpdatedAt;
+  await atomicWrite(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return { image: { ...image }, evidence: [manifestPath] };
+}
+async function persistTrackGenre(root, runtimeCatalog, trackId, rawGenres) {
+  const allowed = new Set(["Reggae", "Rock", "Reggaeton", "Pop", "Clásica", "Electrónica", "Corrido", "Rap"]);
+  const genres = [...new Set((Array.isArray(rawGenres) ? rawGenres : rawGenres ? [rawGenres] : []).map((value) => String(value).trim()).filter(Boolean))];
+  if (genres.some((genre) => !allowed.has(genre))) throw new Error("invalid_genre");
+  const state = await canonicalTrack(root, trackId);
+  const genre = genres[0] || "";
+  const genreUpdatedAt = new Date().toISOString();
+  Object.assign(state.item, { tag: genre, genre, genres, genreUpdatedAt });
+  Object.assign(state.metadata, { tag: genre, genre, genres, genreUpdatedAt });
+  await atomicWrite(state.metadataPath, `${JSON.stringify(state.metadata, null, 2)}\n`);
+  await atomicWrite(state.manifestPath, `${JSON.stringify(state.manifest, null, 2)}\n`);
+  const runtimeTrack = runtimeCatalog?.tracks.find((track) => track.id === trackId);
+  if (runtimeTrack) Object.assign(runtimeTrack, { tag: genre, genres });
+  return { genre, genres, evidence: [state.metadataPath, state.manifestPath] };
+}
 const safeId = (value) => (/^[a-zA-Z0-9_-]+$/.test(value || "") ? value : null);
 const normalizeTitle = (value = "") =>
   value
@@ -112,6 +219,7 @@ async function createCatalog(root, appRoot, origin) {
       const audioPath = path.join(root, item.folder, item.audio || "audio.mp3");
       localById.set(item.id, audioPath);
       const coverPath = path.join(root, item.folder, item.cover || "cover.jpg");
+      const panoramicCoverPath = path.join(root, item.folder, item.panoramicCover || "panoramic-cover.jpg");
       const lyricsPath = path.join(
         root,
         item.folder,
@@ -121,20 +229,31 @@ async function createCatalog(root, appRoot, origin) {
       try {
         lyrics = await fsp.readFile(lyricsPath, "utf8");
       } catch {}
+      if (/^(LETRA|TRANSCRIPCI[ÓO]N) PENDIENTE/i.test(lyrics.trim())) lyrics = "";
       tracks.push({
         id: item.id,
         title: item.title,
         artist: item.artist || "Iyari Gomez",
+        postAuthor: item.postAuthor || "Iyari Cancino Gomez",
+        composer: item.composer || "Iyari Cancino Gomez",
+        recordLabel: item.recordLabel || "BlackMamba RECORDS",
+        pLine: item.pLine || "2025 BlackMamba RECORDS",
         file: `${origin}/api/media/${item.id}`,
         downloadUrl: `${origin}/api/download/${item.id}`,
         streamUrl: null,
         duration: `${Math.floor((item.durationSeconds || 0) / 60)}:${String(Math.floor((item.durationSeconds || 0) % 60)).padStart(2, "0")}`,
-        tag: "USB local",
+        tag: item.genre || item.tag || "",
+        genres: Array.isArray(item.genres) ? item.genres : (item.genre || item.tag ? [item.genre || item.tag] : []),
         cover: fs.existsSync(coverPath)
           ? `${origin}/api/cover/${item.id}`
           : null,
+        panoramicCover: fs.existsSync(panoramicCoverPath)
+          ? `${origin}/api/panoramic-cover/${item.id}`
+          : null,
         lyrics,
         hasLyrics: Boolean(lyrics.trim()),
+        lyricKeywords: Array.isArray(item.lyricKeywords) && item.lyricKeywords.length ? item.lyricKeywords : extractTextKeywords(lyrics),
+        lyricKeywordsSource: item.lyricKeywordsSource || "auto",
         localStatus: "available",
         localFormat: path.extname(audioPath).slice(1).toLowerCase(),
         source: "usb",
@@ -417,10 +536,7 @@ async function startMediaServer(appRoot, options = {}) {
     if (media) {
       const id = safeId(media[2]);
       const audio = catalog.localById.get(id);
-      const file =
-        media[1] === "cover" && audio
-          ? path.join(path.dirname(audio), "cover.jpg")
-          : audio;
+      const file = media[1] === "cover" && audio ? path.join(path.dirname(audio), "cover.jpg") : media[1] === "panoramic-cover" && audio ? path.join(path.dirname(audio), "panoramic-cover.jpg") : audio;
       return streamFile(req, res, file);
     }
     const download = url.pathname.match(/^\/api\/download\/([^/]+)$/);
@@ -538,4 +654,4 @@ async function startMediaServer(appRoot, options = {}) {
     },
   };
 }
-module.exports = { startMediaServer, findLibraryRoot, splitCatalog };
+module.exports = { startMediaServer, findLibraryRoot, splitCatalog, persistTrackLyrics, persistTrackKeywords, persistCoverMetadata, persistTrackGenre, readImageDimensions };
