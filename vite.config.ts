@@ -22,7 +22,9 @@ const devLibraryRoot=process.env.BLACKMAMBA_LIBRARY_ROOT||'/Volumes/ADATA SC740/
 type LyricJob={progress:number;message:string;status:'running'|'done'|'error';lyrics?:string;error?:string};
 const lyricJobs=new Map<string,LyricJob>();
 function sanitizeInboxFileName(value:unknown){
-  const file=String(value||'').replace(/[^a-zA-Z0-9_.-]/g,'');
+  const raw=String(value||'');
+  if(raw.includes('..'))return '';
+  const file=raw.replace(/[^a-zA-Z0-9_.-]/g,'');
   if(!file||file==='.'||file==='..'||file.includes('..'))return '';
   return file;
 }
