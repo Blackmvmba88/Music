@@ -28,6 +28,20 @@ describe("local profile", () => {
     saveRatings(ratings);
     expect(loadProfile().ratings).toEqual(ratings);
   });
+  it("keeps only integer ratings from 1 to 5", () => {
+    localStorage.setItem(
+      "pulso.profile.v1",
+      JSON.stringify({ ratings: { ok: 5, low: 0, high: 6, float: 4.5, nan: Number.NaN } }),
+    );
+    expect(loadProfile().ratings).toEqual({ ok: 5 });
+  });
+  it("filters legacy ratings during migration", () => {
+    localStorage.setItem(
+      "blackmamba-vitrine-ratings",
+      JSON.stringify({ oldOk: 4, oldBad: -1, oldFloat: 3.2 }),
+    );
+    expect(loadProfile().ratings).toEqual({ oldOk: 4 });
+  });
   it("recovers from corrupt data", () => {
     localStorage.setItem("pulso.profile.v1", "{");
     expect(loadProfile().sessions).toEqual([]);

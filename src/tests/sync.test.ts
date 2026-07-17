@@ -29,7 +29,16 @@ describe("private Firebase sync", () => {
 
   it("loads only valid ratings and reviews", async () => {
     firestore.getDocs
-      .mockResolvedValueOnce(snapshot([{ id: "song-1", data: { rating: 5 } }, { id: "bad", data: { rating: "5" } }]))
+      .mockResolvedValueOnce(
+        snapshot([
+          { id: "song-1", data: { rating: 5 } },
+          { id: "bad-type", data: { rating: "5" } },
+          { id: "bad-low", data: { rating: 0 } },
+          { id: "bad-high", data: { rating: 6 } },
+          { id: "bad-float", data: { rating: 4.5 } },
+          { id: "bad-nan", data: { rating: Number.NaN } },
+        ]),
+      )
       .mockResolvedValueOnce(snapshot([{ id: "song-1", data: { status: "belongs" } }, { id: "bad", data: { status: 4 } }]))
     expect(await fetchUserRatings("user-1")).toEqual({ "song-1": 5 });
     expect(await fetchUserReviews("user-1")).toEqual({ "song-1": "belongs" });
@@ -52,6 +61,13 @@ describe("private Firebase sync", () => {
     expect(firestore.setDoc).toHaveBeenCalledTimes(2);
     expect(firestore.setDoc).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ rating: 4, updatedAt: expect.any(String) }));
     expect(firestore.setDoc).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: "later", updatedAt: expect.any(String) }));
+
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await saveUserRating("user-1", "song-invalid", 4.5);
+    await saveUserRating("user-1", "song-invalid", 0);
+    expect(firestore.setDoc).toHaveBeenCalledTimes(2);
+    expect(error).toHaveBeenCalledTimes(2);
+    error.mockRestore();
   });
 
   it("synchronizes every local decision and tolerates write failures", async () => {

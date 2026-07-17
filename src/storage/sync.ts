@@ -1,14 +1,18 @@
 import { doc, getDocs, collection, setDoc } from "firebase/firestore";
 import { db } from "../auth/firebase";
 
+function isValidRating(rating: unknown): rating is number {
+  return Number.isInteger(rating) && rating >= 1 && rating <= 5;
+}
+
 export async function fetchUserRatings(uid: string): Promise<Record<string, number>> {
   const ratings: Record<string, number> = {};
   try {
     const querySnapshot = await getDocs(collection(db, "users", uid, "ratings"));
-    querySnapshot.forEach((doc) => {
-      const data = doc.data();
-      if (typeof data.rating === "number") {
-        ratings[doc.id] = data.rating;
+    querySnapshot.forEach((ratingDoc) => {
+      const data = ratingDoc.data();
+      if (isValidRating(data.rating)) {
+        ratings[ratingDoc.id] = data.rating;
       }
     });
   } catch (error) {
@@ -35,6 +39,7 @@ export async function fetchUserReviews(uid: string): Promise<Record<string, stri
 
 export async function saveUserRating(uid: string, trackId: string, rating: number): Promise<void> {
   try {
+    if (!isValidRating(rating)) throw new Error("invalid_rating");
     await setDoc(doc(db, "users", uid, "ratings", trackId), {
       rating,
       updatedAt: new Date().toISOString(),
