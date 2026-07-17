@@ -21,6 +21,23 @@ function copyRuntimeAssets():Plugin{
 const devLibraryRoot=process.env.BLACKMAMBA_LIBRARY_ROOT||'/Volumes/ADATA SC740/01_MEDIA_AUDIO/BLACKMAMBA_PLAYER';
 type LyricJob={progress:number;message:string;status:'running'|'done'|'error';lyrics?:string;error?:string};
 const lyricJobs=new Map<string,LyricJob>();
+function sanitizeInboxFileName(value:unknown){
+  const raw=String(value||'');
+  if(raw.includes('..'))return '';
+  const file=raw.replace(/[^a-zA-Z0-9_.-]/g,'');
+  if(!file||file==='.'||file==='..'||file.includes('..'))return '';
+  return file;
+}
+function parseByteRange(range:string,size:number){
+  if(!range.startsWith('bytes='))return null;
+  const [rawStart,rawEnd]=range.slice('bytes='.length).split('-',2);
+  if(!/^\d+$/.test(rawStart||''))return null;
+  if(rawEnd&&!/^\d+$/.test(rawEnd))return null;
+  const start=Number(rawStart);
+  const end=rawEnd?Number(rawEnd):size-1;
+  if(!Number.isInteger(start)||!Number.isInteger(end)||start<0||end<start||end>=size)return null;
+  return{start,end};
+}
 function startLyricJob(trackId:string){
   const existing=lyricJobs.get(trackId);if(existing?.status==='running')return existing;
   const job:LyricJob={progress:1,message:'Iniciando extracción',status:'running'};lyricJobs.set(trackId,job);
@@ -44,11 +61,11 @@ function devUsbMedia():Plugin{
       }
       if(pathname==='/api/assign-cover'&&req.method==='POST'){
         let raw='';for await(const chunk of req)raw+=chunk;
-        try{const body=JSON.parse(raw);const trackId=String(body.trackId||'');const imageFile=String(body.imageFile||'').replace(/[^a-zA-Z0-9_.-]/g,'');const audio=localById.get(trackId);if(!audio||!imageFile)throw new Error('assignment_target_not_found');await cp(join(devLibraryRoot,'00_COVER_INBOX',imageFile),join(resolve(audio,'..'),'cover.jpg'));res.setHeader('Content-Type','application/json');res.end(JSON.stringify({ok:true,trackId,cover:`/api/dev-cover/${trackId}?v=${Date.now()}`}));}catch(error){res.statusCode=400;res.end(JSON.stringify({error:error instanceof Error?error.message:'invalid_assignment'}));}return;
+        try{const body=JSON.parse(raw);const trackId=String(body.trackId||'');const imageFile=sanitizeInboxFileName(body.imageFile);const audio=localById.get(trackId);if(!audio||!imageFile)throw new Error('assignment_target_not_found');await cp(join(devLibraryRoot,'00_COVER_INBOX',imageFile),join(resolve(audio,'..'),'cover.jpg'));res.setHeader('Content-Type','application/json');res.end(JSON.stringify({ok:true,trackId,cover:`/api/dev-cover/${trackId}?v=${Date.now()}`}));}catch(error){res.statusCode=400;res.end(JSON.stringify({error:error instanceof Error?error.message:'invalid_assignment'}));}return;
       }
       if(pathname==='/api/delete-cover-assets'&&req.method==='POST'){
         let raw='';for await(const chunk of req)raw+=chunk;
-        try{const body=JSON.parse(raw);const requested=new Set((Array.isArray(body.files)?body.files:[]).map((file:unknown)=>String(file).replace(/[^a-zA-Z0-9_.-]/g,'')));const manifestPath=join(devLibraryRoot,'00_COVER_INBOX/images.json');const manifest=JSON.parse(await readFile(manifestPath,'utf8'));const removable=(manifest.images||[]).filter((item:{file:string;matchedTrackId?:string|null})=>requested.has(item.file)&&!item.matchedTrackId);for(const item of removable)await rm(join(devLibraryRoot,'00_COVER_INBOX',item.file),{force:true});manifest.images=(manifest.images||[]).filter((item:{file:string})=>!removable.some((removed:{file:string})=>removed.file===item.file));manifest.unique=manifest.images.length;manifest.updatedAt=new Date().toISOString();await writeFile(manifestPath,`${JSON.stringify(manifest,null,2)}\n`);res.setHeader('Content-Type','application/json');res.end(JSON.stringify({deleted:removable.length,protected:requested.size-removable.length}));}catch(error){res.statusCode=400;res.end(JSON.stringify({error:error instanceof Error?error.message:'invalid_delete_request'}));}return;
+        try{const body=JSON.parse(raw);const requested=new Set((Array.isArray(body.files)?body.files:[]).map((file:unknown)=>sanitizeInboxFileName(file)).filter(Boolean));const manifestPath=join(devLibraryRoot,'00_COVER_INBOX/images.json');const manifest=JSON.parse(await readFile(manifestPath,'utf8'));const removable=(manifest.images||[]).filter((item:{file:string;matchedTrackId?:string|null})=>requested.has(item.file)&&!item.matchedTrackId);for(const item of removable)await rm(join(devLibraryRoot,'00_COVER_INBOX',item.file),{force:true});manifest.images=(manifest.images||[]).filter((item:{file:string})=>!removable.some((removed:{file:string})=>removed.file===item.file));manifest.unique=manifest.images.length;manifest.updatedAt=new Date().toISOString();await writeFile(manifestPath,`${JSON.stringify(manifest,null,2)}\n`);res.setHeader('Content-Type','application/json');res.end(JSON.stringify({deleted:removable.length,protected:requested.size-removable.length}));}catch(error){res.statusCode=400;res.end(JSON.stringify({error:error instanceof Error?error.message:'invalid_delete_request'}));}return;
       }
       const lyricRoute=pathname.match(/^\/api\/lyrics\/([a-zA-Z0-9_-]+)$/);
       if(lyricRoute&&req.method==='POST'){const job=startLyricJob(lyricRoute[1]);res.statusCode=job.status==='running'?202:200;res.setHeader('Content-Type','application/json');res.end(JSON.stringify(job));return;}
@@ -67,14 +84,14 @@ function devUsbMedia():Plugin{
         res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify({tracks,confidence:.98,evidence:[`USB detectada: ${devLibraryRoot}`],warnings:[],fallbackReason:null}));return;
       }
       const inbox=pathname.match(/^\/api\/dev-inbox\/([a-zA-Z0-9_.-]+)$/);
-      if(inbox){const file=join(devLibraryRoot,'00_COVER_INBOX',inbox[1]);if(!existsSync(file)){res.statusCode=404;res.end('image_not_found');return;}const extension=extname(file).toLowerCase();res.setHeader('Content-Type',extension==='.png'?'image/png':extension==='.webp'?'image/webp':extension==='.avif'?'image/avif':'image/jpeg');createReadStream(file).pipe(res);return;}
+      if(inbox){const imageFile=sanitizeInboxFileName(inbox[1]);if(!imageFile){res.statusCode=400;res.end('invalid_image_file');return;}const file=join(devLibraryRoot,'00_COVER_INBOX',imageFile);if(!existsSync(file)){res.statusCode=404;res.end('image_not_found');return;}const extension=extname(file).toLowerCase();res.setHeader('Content-Type',extension==='.png'?'image/png':extension==='.webp'?'image/webp':extension==='.avif'?'image/avif':'image/jpeg');createReadStream(file).pipe(res);return;}
       const match=pathname.match(/^\/api\/dev-(media|cover)\/([a-zA-Z0-9_-]+)$/);
       if(!match)return next();
       const audio=localById.get(match[2]);
       const file=match[1]==='cover'&&audio?join(resolve(audio,'..'),'cover.jpg'):audio;
       if(!file||!existsSync(file)){res.statusCode=404;res.end('media_not_found');return;}
       const stat=statSync(file);const range=req.headers.range;const mime=extname(file).toLowerCase()==='.wav'?'audio/wav':match[1]==='cover'?'image/jpeg':'audio/mpeg';
-      if(range){const [a,b]=range.replace('bytes=','').split('-');const start=Number(a);const end=b?Number(b):stat.size-1;res.statusCode=206;res.setHeader('Content-Range',`bytes ${start}-${end}/${stat.size}`);res.setHeader('Content-Length',end-start+1);res.setHeader('Accept-Ranges','bytes');res.setHeader('Content-Type',mime);createReadStream(file,{start,end}).pipe(res);return;}
+      if(range){const parsed=parseByteRange(range,stat.size);if(!parsed){res.statusCode=416;res.setHeader('Content-Range',`bytes */${stat.size}`);res.end('invalid_range');return;}res.statusCode=206;res.setHeader('Content-Range',`bytes ${parsed.start}-${parsed.end}/${stat.size}`);res.setHeader('Content-Length',parsed.end-parsed.start+1);res.setHeader('Accept-Ranges','bytes');res.setHeader('Content-Type',mime);createReadStream(file,{start:parsed.start,end:parsed.end}).pipe(res);return;}
       res.setHeader('Content-Length',stat.size);res.setHeader('Accept-Ranges','bytes');res.setHeader('Content-Type',mime);createReadStream(file).pipe(res);
     });
   }};

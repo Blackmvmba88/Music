@@ -3,12 +3,12 @@ import { getAuth, GoogleAuthProvider, GithubAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAdn3z3kLY8b4IHXbyzNcd1dgWOfbSizLI",
-  authDomain: "blackmamba-music-reproductor.firebaseapp.com",
-  projectId: "blackmamba-music-reproductor",
-  storageBucket: "blackmamba-music-reproductor.firebasestorage.app",
-  messagingSenderId: "59372152830",
-  appId: "1:59372152830:web:317c45da3ec60a8c9f42af"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 // Initialize Firebase
