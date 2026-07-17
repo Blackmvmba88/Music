@@ -1,6 +1,67 @@
 # BlackMamba Music
 
-Reproductor y biblioteca privada de BlackMamba Records. Funciona como WebUI local en `/music` y como aplicación de escritorio para macOS. Los audios canónicos pueden permanecer en la USB; el DMG no incorpora MP3 ni WAV.
+> **Sistema operativo privado para administrar, preservar y hacer crecer una carrera musical.**
+
+BlackMamba Music organiza el catálogo, las letras, las portadas, las versiones,
+la evidencia editorial y la disponibilidad de cada obra en USB, Suno y
+SoundCloud. Funciona como WebUI local en `/music` y como aplicación de escritorio
+para macOS. Los audios canónicos pueden permanecer en la USB; el DMG no incorpora
+MP3 ni WAV.
+
+No es únicamente un reproductor. Es el núcleo operativo de **BlackMamba RECORDS**.
+
+> La música no es sólo audio: también es memoria, identidad, evidencia y legado.
+
+## Visión
+
+Construir una plataforma capaz de administrar una carrera musical completa,
+desde una canción hasta un catálogo de decenas de miles de obras, preservando
+cada versión, letra, portada, fuente y decisión editorial durante décadas.
+
+## Principios de ingeniería
+
+- **Offline first:** la biblioteca conserva su utilidad sin depender de servicios externos.
+- **Catálogo canónico:** cada canción tiene una sola ficha principal y disponibilidad independiente por plataforma.
+- **Escrituras atómicas:** los cambios persistentes evitan estados parciales o archivos corruptos.
+- **Evidence driven:** toda ingestión expone confianza, evidencia, advertencias y razón de fallback.
+- **AI assisted, human verified:** la IA acelera y propone; el criterio humano decide.
+- **Recoverable by design:** las obras remotas permanecen visibles y recuperables aunque el audio todavía no esté materializado.
+- **Zero audio loss:** ningún original se elimina sin verificar primero la copia canónica y su SHA-256.
+
+## Plataforma
+
+| Subsistema | Responsabilidad |
+| --- | --- |
+| **Player** | Reproducción, transporte, historial, ratings y vistas especializadas |
+| **Library** | Catálogo canónico, USB, metadatos, portadas, letras y versiones |
+| **AI** | Transcripción, clasificación, cotejo, evidencia y recuperación asistida |
+| **Studio** | Edición visual, galería, metadata editorial y herramientas por canción |
+| **Connectors** | Integración y conciliación con Suno y SoundCloud |
+| **School** | Entrenamiento rítmico y módulos educativos |
+| **Desktop Runtime** | Electron, servidor local, streaming HTTP Range y aplicación macOS |
+
+## Política de inteligencia artificial
+
+La IA nunca sustituye automáticamente una decisión editorial importante. Su
+función es acelerar la clasificación, transcripción, recuperación y revisión.
+Antes de modificar el catálogo, toda operación relevante debe conservar:
+
+- confianza;
+- evidencia;
+- advertencias;
+- razón de fallback;
+- posibilidad de revisión humana.
+
+## Límites deliberados
+
+- No elimina audio sin verificar la copia canónica por SHA-256.
+- No reemplaza letras humanas automáticamente.
+- No publica contenido sin aprobación explícita.
+- No deduplica únicamente por nombre.
+- No asume que un registro remoto equivale a audio disponible.
+- No incrusta MP3 o WAV en builds públicos ni en DMG privados.
+
+## Producto integrado
 
 Este repositorio es el producto integrado `Music`: contiene el reproductor, la
 Escuela de Música, el catálogo, los conectores Suno/SoundCloud y las
@@ -223,12 +284,12 @@ React WebUI / aplicación macOS
 ```
 
 ```text
-src/app/                 Reproductor y biblioteca
-src/api/                 Contrato de carga del catálogo
+src/app/                  Reproductor y biblioteca
+src/api/                  Contrato de carga del catálogo
 electron/media-server.cjs Catálogo, streaming y archivos USB
-electron/main.cjs        Ventana, transporte y actualizaciones
-scripts/                 Ingesta, auditoría, dedupe y releases
-public/player/           Snapshot web del catálogo
+electron/main.cjs         Ventana, transporte y actualizaciones
+scripts/                  Ingesta, auditoría, dedupe y releases
+public/player/            Snapshot web del catálogo
 ```
 
 Toda operación de ingestión debe exponer confianza, evidencia, advertencias y razón de fallback. En movimientos destructivos se verifica primero la copia canónica y el hash de origen.
@@ -248,3 +309,7 @@ Toda operación de ingestión debe exponer confianza, evidencia, advertencias y 
 
 - [ROADMAP.md](./ROADMAP.md): fases terminadas y pendientes.
 - [METACOMMANDS.md](./METACOMMANDS.md): órdenes cortas para operar el proyecto.
+
+---
+
+> **No administramos archivos. Preservamos legado.**
