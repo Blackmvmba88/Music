@@ -1,6 +1,6 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-yt-dlp==2023.11.16
+yt-dlp==2026.7.4
 python-multipart==0.0.6
 websockets==12.0
 numpy==1.26.2
