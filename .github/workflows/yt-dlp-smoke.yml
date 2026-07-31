@@ -1,0 +1,94 @@
+name: yt-dlp smoke test
+
+on:
+  pull_request:
+    paths:
+      - "tools/music-streaming-legacy-2025/backend/**"
+      - ".github/workflows/yt-dlp-smoke.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tools/music-streaming-legacy-2025/backend/**"
+      - ".github/workflows/yt-dlp-smoke.yml"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/music-streaming-legacy-2025/backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: tools/music-streaming-legacy-2025/backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Verify installed yt-dlp version
+        run: |
+          python - <<'PY'
+          import yt_dlp
+          from yt_dlp.version import __version__
+
+          print(f"yt-dlp {__version__}")
+          assert __version__ == "2026.07.04", __version__
+          assert hasattr(yt_dlp, "YoutubeDL")
+          PY
+
+      - name: Verify backend integration contract
+        run: |
+          python - <<'PY'
+          from unittest.mock import patch
+          import main
+
+          fake_info = {
+              "title": "Smoke test",
+              "duration": 123,
+              "url": "https://example.com/audio.mp3",
+          }
+
+          with patch("yt_dlp.YoutubeDL.extract_info", return_value=fake_info) as extract:
+              info = main.get_audio_info("https://example.com/watch?v=smoke")
+              audio_url = main.get_audio_url("https://example.com/watch?v=smoke")
+
+          assert info == fake_info
+          assert audio_url == fake_info["url"]
+          assert extract.call_count == 2
+          assert main.validate_url("https://example.com/watch?v=smoke")
+          assert not main.validate_url("not-a-url")
+          assert main.app.title == "Music Streaming API"
+          PY
+
+      - name: Resolve public media metadata without download
+        run: |
+          python - <<'PY'
+          import time
+          import yt_dlp
+
+          url = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+          error = None
+          for attempt in range(1, 4):
+              try:
+                  with yt_dlp.YoutubeDL({
+                      "quiet": True,
+                      "no_warnings": True,
+                      "skip_download": True,
+                      "socket_timeout": 20,
+                  }) as ydl:
+                      info = ydl.extract_info(url, download=False)
+                  assert info
+                  assert info.get("url")
+                  print({"extractor": info.get("extractor"), "title": info.get("title")})
+                  break
+              except Exception as exc:
+                  error = exc
+                  if attempt == 3:
+                      raise
+                  time.sleep(attempt * 2)
+          PY
