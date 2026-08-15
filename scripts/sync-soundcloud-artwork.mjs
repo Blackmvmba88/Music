@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
-import { basename, extname, join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 const projectRoot = resolve(import.meta.dirname, '..');
 const libraryRoot = process.env.BLACKMAMBA_LIBRARY_ROOT || '/Volumes/ADATA SC740/01_MEDIA_AUDIO/BLACKMAMBA_PLAYER';
@@ -14,17 +14,28 @@ const limit = limitArg ? Math.max(1, Number(limitArg.slice('--limit='.length)) |
 
 const API = 'https://api.soundcloud.com';
 const now = () => new Date().toISOString();
-const mimeFor = (file) => {
-  const extension = extname(file).toLowerCase();
-  if (extension === '.png') return 'image/png';
-  if (extension === '.webp') return 'image/webp';
-  if (extension === '.avif') return 'image/avif';
-  return 'image/jpeg';
-};
 const authHeaders = () => ({
   Accept: 'application/json; charset=utf-8',
   Authorization: `OAuth ${token}`,
 });
+
+function detectImage(buffer, sourceName) {
+  const isJpeg = buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  if (isJpeg) return { mime: 'image/jpeg', filename: `${basename(sourceName).replace(/\.[^.]+$/, '') || 'cover'}.jpg` };
+
+  const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const isPng = buffer.length >= 8 && pngSignature.every((value, index) => buffer[index] === value);
+  if (isPng) return { mime: 'image/png', filename: `${basename(sourceName).replace(/\.[^.]+$/, '') || 'cover'}.png` };
+
+  const isWebp = buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
+  if (isWebp) return { mime: 'image/webp', filename: `${basename(sourceName).replace(/\.[^.]+$/, '') || 'cover'}.webp` };
+
+  const box = buffer.length >= 16 ? buffer.subarray(4, 16).toString('ascii') : '';
+  const isAvif = box.includes('ftypavif') || box.includes('ftypavis');
+  if (isAvif) return { mime: 'image/avif', filename: `${basename(sourceName).replace(/\.[^.]+$/, '') || 'cover'}.avif` };
+
+  throw new Error('unsupported_local_cover_format');
+}
 
 async function getTrack(trackId) {
   const response = await fetch(`${API}/tracks/${encodeURIComponent(trackId)}`, { headers: authHeaders() });
@@ -32,10 +43,9 @@ async function getTrack(trackId) {
   return response.json();
 }
 
-async function putArtwork(trackId, coverPath) {
-  const artwork = await readFile(coverPath);
+async function putArtwork(trackId, coverPath, artwork, image) {
   const form = new FormData();
-  form.append('track[artwork_data]', new Blob([artwork], { type: mimeFor(coverPath) }), basename(coverPath));
+  form.append('track[artwork_data]', new Blob([artwork], { type: image.mime }), image.filename);
   const response = await fetch(`${API}/tracks/${encodeURIComponent(trackId)}`, {
     method: 'PUT',
     headers: authHeaders(),
@@ -85,6 +95,7 @@ const report = {
   },
   evidence: [
     'GET https://api.soundcloud.com/tracks/:id before every decision',
+    'Local artwork MIME validated from file signature instead of filename extension',
     'PUT multipart track[artwork_data] only in --apply mode',
     'GET https://api.soundcloud.com/tracks/:id after every PUT',
   ],
@@ -110,6 +121,8 @@ for (const candidate of candidates) {
 
   processed += 1;
   try {
+    const artwork = await readFile(candidate.coverPath);
+    const image = detectImage(artwork, candidate.coverPath);
     const before = await getTrack(candidate.soundcloudId);
     report.summary.remoteChecked += 1;
     const beforeArtwork = before.artwork_url || null;
@@ -118,18 +131,18 @@ for (const candidate of candidates) {
     else report.summary.missingRemoteArtwork += 1;
 
     if (hasRemoteArtwork) {
-      report.results.push({ ...candidate, status: 'already_has_remote_artwork', beforeArtwork, verified: true });
+      report.results.push({ ...candidate, imageMime: image.mime, status: 'already_has_remote_artwork', beforeArtwork, verified: true });
       continue;
     }
 
     report.summary.eligible += 1;
     if (!apply) {
-      report.results.push({ ...candidate, status: 'would_apply', beforeArtwork: null, verified: false });
+      report.results.push({ ...candidate, imageMime: image.mime, status: 'would_apply', beforeArtwork: null, verified: false });
       continue;
     }
 
     report.summary.attempted += 1;
-    await putArtwork(candidate.soundcloudId, candidate.coverPath);
+    await putArtwork(candidate.soundcloudId, candidate.coverPath, artwork, image);
     report.summary.applied += 1;
 
     const after = await getTrack(candidate.soundcloudId);
@@ -137,7 +150,7 @@ for (const candidate of candidates) {
     const verified = Boolean(afterArtwork);
     if (!verified) throw new Error('artwork_not_verified_after_put');
     report.summary.verified += 1;
-    report.results.push({ ...candidate, status: 'applied_and_verified', beforeArtwork: null, afterArtwork, verified: true, verifiedAt: now() });
+    report.results.push({ ...candidate, imageMime: image.mime, status: 'applied_and_verified', beforeArtwork: null, afterArtwork, verified: true, verifiedAt: now() });
   } catch (error) {
     report.summary.failed += 1;
     report.results.push({ ...candidate, status: 'failed', verified: false, error: error instanceof Error ? error.message : String(error) });
