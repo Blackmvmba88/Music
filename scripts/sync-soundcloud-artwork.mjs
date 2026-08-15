@@ -37,16 +37,22 @@ function detectImage(buffer, sourceName) {
   throw new Error('unsupported_local_cover_format');
 }
 
-async function getTrack(trackId) {
-  const response = await fetch(`${API}/tracks/${encodeURIComponent(trackId)}`, { headers: authHeaders() });
+function trackUrn(track) {
+  if (track.soundcloudUrn) return String(track.soundcloudUrn);
+  if (track.soundcloudId) return `soundcloud:tracks:${String(track.soundcloudId)}`;
+  return null;
+}
+
+async function getTrack(trackRef) {
+  const response = await fetch(`${API}/tracks/${encodeURIComponent(trackRef)}`, { headers: authHeaders() });
   if (!response.ok) throw new Error(`soundcloud_get_${response.status}`);
   return response.json();
 }
 
-async function putArtwork(trackId, coverPath, artwork, image) {
+async function putArtwork(trackRef, artwork, image) {
   const form = new FormData();
   form.append('track[artwork_data]', new Blob([artwork], { type: image.mime }), image.filename);
-  const response = await fetch(`${API}/tracks/${encodeURIComponent(trackId)}`, {
+  const response = await fetch(`${API}/tracks/${encodeURIComponent(trackRef)}`, {
     method: 'PUT',
     headers: authHeaders(),
     body: form,
@@ -59,7 +65,7 @@ async function putArtwork(trackId, coverPath, artwork, image) {
 }
 
 const catalog = JSON.parse(await readFile(manifestPath, 'utf8'));
-const linked = (catalog.tracks || []).filter((track) => track.soundcloudId && track.folder);
+const linked = (catalog.tracks || []).filter((track) => trackUrn(track) && track.folder);
 const candidates = [];
 for (const track of linked) {
   const coverName = track.cover || 'cover.jpg';
@@ -67,7 +73,8 @@ for (const track of linked) {
   candidates.push({
     localTrackId: track.id,
     title: track.title,
-    soundcloudId: String(track.soundcloudId),
+    soundcloudUrn: trackUrn(track),
+    soundcloudId: track.soundcloudId ? String(track.soundcloudId) : null,
     soundcloudUrl: track.soundcloudUrl || null,
     coverName,
     coverPath,
@@ -94,10 +101,11 @@ const report = {
     failed: 0,
   },
   evidence: [
-    'GET https://api.soundcloud.com/tracks/:id before every decision',
+    'SoundCloud track resources addressed by URN; legacy numeric IDs are converted to soundcloud:tracks:<id>',
+    'GET https://api.soundcloud.com/tracks/:track_urn before every decision',
     'Local artwork MIME validated from file signature instead of filename extension',
     'PUT multipart track[artwork_data] only in --apply mode',
-    'GET https://api.soundcloud.com/tracks/:id after every PUT',
+    'GET https://api.soundcloud.com/tracks/:track_urn after every PUT',
   ],
   warnings: [],
   results: [],
@@ -123,34 +131,35 @@ for (const candidate of candidates) {
   try {
     const artwork = await readFile(candidate.coverPath);
     const image = detectImage(artwork, candidate.coverPath);
-    const before = await getTrack(candidate.soundcloudId);
+    const before = await getTrack(candidate.soundcloudUrn);
     report.summary.remoteChecked += 1;
+    const canonicalUrn = before.urn || candidate.soundcloudUrn;
     const beforeArtwork = before.artwork_url || null;
     const hasRemoteArtwork = Boolean(beforeArtwork);
     if (hasRemoteArtwork) report.summary.alreadyHasRemoteArtwork += 1;
     else report.summary.missingRemoteArtwork += 1;
 
     if (hasRemoteArtwork) {
-      report.results.push({ ...candidate, imageMime: image.mime, status: 'already_has_remote_artwork', beforeArtwork, verified: true });
+      report.results.push({ ...candidate, canonicalUrn, imageMime: image.mime, status: 'already_has_remote_artwork', beforeArtwork, verified: true });
       continue;
     }
 
     report.summary.eligible += 1;
     if (!apply) {
-      report.results.push({ ...candidate, imageMime: image.mime, status: 'would_apply', beforeArtwork: null, verified: false });
+      report.results.push({ ...candidate, canonicalUrn, imageMime: image.mime, status: 'would_apply', beforeArtwork: null, verified: false });
       continue;
     }
 
     report.summary.attempted += 1;
-    await putArtwork(candidate.soundcloudId, candidate.coverPath, artwork, image);
+    await putArtwork(canonicalUrn, artwork, image);
     report.summary.applied += 1;
 
-    const after = await getTrack(candidate.soundcloudId);
+    const after = await getTrack(canonicalUrn);
     const afterArtwork = after.artwork_url || null;
     const verified = Boolean(afterArtwork);
     if (!verified) throw new Error('artwork_not_verified_after_put');
     report.summary.verified += 1;
-    report.results.push({ ...candidate, imageMime: image.mime, status: 'applied_and_verified', beforeArtwork: null, afterArtwork, verified: true, verifiedAt: now() });
+    report.results.push({ ...candidate, canonicalUrn: after.urn || canonicalUrn, imageMime: image.mime, status: 'applied_and_verified', beforeArtwork: null, afterArtwork, verified: true, verifiedAt: now() });
   } catch (error) {
     report.summary.failed += 1;
     report.results.push({ ...candidate, status: 'failed', verified: false, error: error instanceof Error ? error.message : String(error) });
