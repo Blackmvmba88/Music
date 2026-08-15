@@ -9,7 +9,6 @@ const manifestPath = join(libraryRoot, 'library.json');
 const reportPath = resolve(projectRoot, 'soundcloud-artwork-sync.json');
 const token = process.env.SOUNDCLOUD_ACCESS_TOKEN || process.env.SOUNDCLOUD_OAUTH_TOKEN || '';
 const apply = process.argv.includes('--apply');
-const force = process.argv.includes('--force');
 const limitArg = process.argv.find((value) => value.startsWith('--limit='));
 const limit = limitArg ? Math.max(1, Number(limitArg.slice('--limit='.length)) || 1) : Infinity;
 
@@ -69,7 +68,7 @@ for (const track of linked) {
 const report = {
   generatedAt: now(),
   mode: apply ? 'apply' : 'dry-run',
-  force,
+  completion: apply ? 'running' : 'dry-run-only',
   libraryRoot,
   manifestPath,
   summary: {
@@ -94,6 +93,7 @@ const report = {
 };
 
 if (!token) {
+  report.completion = 'not-executed';
   report.warnings.push('NO EJECUTADO: falta SOUNDCLOUD_ACCESS_TOKEN o SOUNDCLOUD_OAUTH_TOKEN.');
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   console.error(JSON.stringify(report, null, 2));
@@ -117,14 +117,14 @@ for (const candidate of candidates) {
     if (hasRemoteArtwork) report.summary.alreadyHasRemoteArtwork += 1;
     else report.summary.missingRemoteArtwork += 1;
 
-    if (hasRemoteArtwork && !force) {
+    if (hasRemoteArtwork) {
       report.results.push({ ...candidate, status: 'already_has_remote_artwork', beforeArtwork, verified: true });
       continue;
     }
 
     report.summary.eligible += 1;
     if (!apply) {
-      report.results.push({ ...candidate, status: 'would_apply', beforeArtwork, verified: false });
+      report.results.push({ ...candidate, status: 'would_apply', beforeArtwork: null, verified: false });
       continue;
     }
 
@@ -134,10 +134,10 @@ for (const candidate of candidates) {
 
     const after = await getTrack(candidate.soundcloudId);
     const afterArtwork = after.artwork_url || null;
-    const verified = Boolean(afterArtwork) && (!beforeArtwork || afterArtwork !== beforeArtwork || force);
+    const verified = Boolean(afterArtwork);
     if (!verified) throw new Error('artwork_not_verified_after_put');
     report.summary.verified += 1;
-    report.results.push({ ...candidate, status: 'applied_and_verified', beforeArtwork, afterArtwork, verified: true, verifiedAt: now() });
+    report.results.push({ ...candidate, status: 'applied_and_verified', beforeArtwork: null, afterArtwork, verified: true, verifiedAt: now() });
   } catch (error) {
     report.summary.failed += 1;
     report.results.push({ ...candidate, status: 'failed', verified: false, error: error instanceof Error ? error.message : String(error) });
@@ -145,8 +145,14 @@ for (const candidate of candidates) {
 }
 
 report.finishedAt = now();
-report.success = report.summary.failed === 0 && (!apply || report.summary.applied === report.summary.verified);
-if (!report.success) report.warnings.push('No declarar terminado: hay fallos o escrituras sin verificación.');
+const verifiedAllWrites = report.summary.applied === report.summary.verified;
+if (!apply) report.completion = report.summary.failed === 0 ? 'audited-no-write' : 'audit-incomplete';
+else if (report.summary.failed === 0 && verifiedAllWrites) report.completion = 'applied-and-verified';
+else report.completion = 'incomplete';
+report.success = report.completion === 'audited-no-write' || report.completion === 'applied-and-verified';
+if (report.completion === 'incomplete' || report.completion === 'audit-incomplete') {
+  report.warnings.push('No declarar terminado: hay fallos o escrituras sin verificación.');
+}
 await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 console.log(JSON.stringify(report, null, 2));
 if (!report.success) process.exitCode = 1;
