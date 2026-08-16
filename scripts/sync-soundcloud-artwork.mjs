@@ -191,7 +191,7 @@ for (const candidate of candidates) {
     const canonicalUrn = before.urn || candidate.soundcloudUrn;
     const beforeArtwork = before.artwork_url || null;
     const hasRemoteArtwork = Boolean(beforeArtwork);
-    const beforeFingerprint = hasRemoteArtwork ? await getArtworkFingerprint(beforeArtwork) : null;
+    const beforeFingerprint = apply && hasRemoteArtwork ? await getArtworkFingerprint(beforeArtwork) : null;
 
     if (hasRemoteArtwork) report.summary.existingRemoteArtwork += 1;
     else report.summary.missingRemoteArtwork += 1;
@@ -240,8 +240,10 @@ for (const candidate of candidates) {
     const putArtworkUrl = putResult && typeof putResult === 'object' ? putResult.artwork_url || null : null;
     const urlChanged = Boolean(beforeArtwork && afterArtwork && beforeArtwork !== afterArtwork);
     const fingerprintChanged = Boolean(beforeFingerprint && afterFingerprint && beforeFingerprint !== afterFingerprint);
-    const writeAcknowledged = Boolean(putArtworkUrl || afterArtwork);
-    const verified = Boolean(afterArtwork && writeAcknowledged);
+    const writeAcknowledged = Boolean(putArtworkUrl || urlChanged || fingerprintChanged);
+    const verified = hasRemoteArtwork
+      ? Boolean(afterArtwork && writeAcknowledged)
+      : Boolean(afterArtwork);
 
     if (!verified) throw new Error('artwork_not_verified_after_put');
 
