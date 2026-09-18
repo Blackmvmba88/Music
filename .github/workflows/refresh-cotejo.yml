@@ -1,0 +1,57 @@
+name: Refresh canonical SoundCloud cotejo
+
+on:
+  push:
+    branches:
+      - codex/canonical-cotejo-2026-09-17
+    paths:
+      - ".github/workflows/refresh-cotejo.yml"
+      - "scripts/build-final-cotejo.mjs"
+      - "scripts/normalize-soundcloud-jsonl.mjs"
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/canonical-cotejo-2026-09-17
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install yt-dlp
+        run: python3 -m pip install --upgrade yt-dlp
+
+      - name: Fetch current SoundCloud inventory
+        run: |
+          yt-dlp --flat-playlist --dump-json --no-warnings "https://soundcloud.com/iyari-c/tracks" > .tmp-soundcloud.jsonl
+          test -s .tmp-soundcloud.jsonl
+
+      - name: Normalize live inventory
+        run: node scripts/normalize-soundcloud-jsonl.mjs .tmp-soundcloud.jsonl .tmp-soundcloud-api-tracks.json
+
+      - name: Build canonical cotejo
+        run: node scripts/build-final-cotejo.mjs .tmp-soundcloud-api-tracks.json soundcloud-cotejo-final.json
+
+      - name: Remove temporary inventory
+        run: rm -f .tmp-soundcloud.jsonl .tmp-soundcloud-api-tracks.json
+
+      - name: Commit refreshed cotejo
+        run: |
+          git config user.name "blackmamba-catalog-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add soundcloud-cotejo-final.json
+          if git diff --cached --quiet; then
+            echo "No catalog changes."
+            exit 0
+          fi
+          git commit -m "data(soundcloud): refresh canonical cotejo"
+          git push origin HEAD:codex/canonical-cotejo-2026-09-17
