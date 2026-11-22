@@ -19,7 +19,8 @@ Commit `a7689aa5d30be164ec39581aae0d1f95351691e4` updates `.github/workflows/ci.
 - Each stage installs locked dependencies under Node 22 and runs the project doctor.
 - Catalog stage runs Node synthetic tests; quality runs lint and TypeScript; coverage runs Vitest; Vite/Electron builds frontend and checks Electron entry syntax.
 - `fail-fast: false` allows independent results and names the failing category even when GitHub's log download fails.
-- Initial query immediately after the push returned zero runs for the new commit; **CI result is not yet established**.
+- New matrix CI run #122 (45055148141) for commit `a7689aa` completed with **failure**. All four jobs (`catalog`, `quality`, `coverage`, `vite-electron`) failed. This pattern is compatible with a shared prerequisite failure but does **not** establish the cause.
+- Fetching the `catalog` job #137308602934 logs again returned HTTP 404 `BlobNotFound`; steps remained unavailable. The stage results do not prove any test, typecheck, or build actually started.
 
 ## Reproducible validation commands
 
