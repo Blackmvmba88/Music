@@ -1,23 +1,44 @@
 # PR #28 — CI and integration verification (2026-11-22)
 
-Scope: `integration/records-catalog`; do not merge to `main` or publish any music.
+Scope: `integration/records-catalog`. Do not merge to `main`, create a release or publish music.
 
-## Evidence gathered
+## Confirmed evidence
 
-- Original head `7dda4dd057a322171fa4ffd22495e7813b67fa69`: GitHub Actions CI run 45043557024 (#116) completed with **failure**.
-- GitHub Actions job `validate` failed. GitHub's job-log download returned HTTP 404 / `BlobNotFound`; job-step endpoint returned no steps, so the failing command and root cause are **not established**.
-- `package.json` defines `npm run build` as `tsc -b && vite build`; the Electron entry is `electron/main.cjs`.
-- `package-lock.json` is present (lockfile v3), and the CI installs using `npm ci`.
-- The catalog's synthetic tests run without the two private operational CSVs; the historic CSV-based run remains a separate, local data verification.
-- CI workflow was changed in commit `276b63ee066591f2383bd5a65c104b425672957f` to isolate install, doctor, synthetic catalog tests, lint, typecheck, coverage, Vite build and Electron entry syntax checks.
-- Follow-up Actions run 45044682251 (#118) also completed with **failure**. Its steps were unavailable and its log URL returned `BlobNotFound`. CI is **not fixed** and no local build can be claimed.
-- The connected Mac mini was offline when checked, and the temporary workspace could not resolve github.com to clone the repository. No local Vite/Electron build was executed.
+- CI runs #116 (45043557024), #118 (45044682251) and #120 (45044737349) failed.
+- Run #120 had a single failing job, `validate`, job ID 137276744252; job steps were null.
+- The GitHub job-log endpoint for #120 returned HTTP 404 `BlobNotFound`. The root cause is **unknown**.
+- `package.json` defines `build` as `tsc -b && vite build`; Electron entry: `electron/main.cjs`.
+- The authorized Mac mini was offline (last seen 25 hours earlier), so no local install, build or Electron smoke test was run in this cycle.
+- Historical private CSV fixtures are intentionally not committed; synthetic tests use `scripts/test-records-catalog.mjs`.
 
-## Next checks
+## Implemented this cycle
 
-1. Restore access to the Mac mini or a network-capable runner and execute `npm ci`, `node --test scripts/test-records-catalog.mjs`, `npm run lint`, `npm run typecheck`, `npm run test:coverage`, `npm run build`, and `node --check electron/main.cjs`.
-2. Capture first failing command and complete stdout/stderr. Fix only the established root cause, then rerun CI.
-3. Verify the recording screen, exact SoundCloud link matching, audio fallback and artwork in the compiled Electron app.
-4. Validate Musica and suno-suite adapters with non-destructive samples; keep publishing disabled until explicit later approval.
+Commit `a7689aa5d30be164ec39581aae0d1f95351691e4` updates `.github/workflows/ci.yml` on the PR branch only.
 
-No base-branch merge, release, distribution upload or live publishing was performed.
+- Matrix stages: `catalog`, `quality`, `coverage`, `vite-electron`.
+- Each stage installs locked dependencies under Node 22 and runs the project doctor.
+- Catalog stage runs Node synthetic tests; quality runs lint and TypeScript; coverage runs Vitest; Vite/Electron builds frontend and checks Electron entry syntax.
+- `fail-fast: false` allows independent results and names the failing category even when GitHub's log download fails.
+- Initial query immediately after the push returned zero runs for the new commit; **CI result is not yet established**.
+
+## Reproducible validation commands
+
+```bash
+npm ci
+npm run doctor
+node --test scripts/test-records-catalog.mjs
+npm run lint
+npm run typecheck
+npm run test:coverage
+npm run build
+node --check electron/main.cjs
+```
+
+## Next technical work
+
+1. Inspect per-stage workflow conclusions for commit `a7689aa`; fetch logs if GitHub exposes them.
+2. Fix the first verified root cause and rerun checks without changing `main`.
+3. Validate screen `/records/`, exact SoundCloud URL matching, local audio/cover fallback and editorial storage in a compiled Electron runtime.
+4. Add read-only Musica/suno-suite adapter validation with synthetic fixtures; require separate explicit authorization for publication.
+
+No merge, release, distribution upload or music publication was performed.
