@@ -6,6 +6,22 @@ const queue = byId('queue');
 const detail = byId('detail');
 let ordered = [];
 let mediaUrls = [];
+let library = Promise.resolve([]);
+let revision = 0;
+
+async function readJson(path) {
+  const response = await fetch(path, { cache: 'no-store' });
+  if (!response.ok) throw new Error('HTTP ' + response.status);
+  return response.json();
+}
+
+function musicAsset(path) {
+  if (typeof path !== 'string' || !path) return '';
+  try {
+    const url = new URL(path, location.origin);
+    return url.origin === location.origin || url.protocol === 'https:' ? url.href : '';
+  } catch { return ''; }
+}
 
 function append(parent, tag, text) {
   const node = document.createElement(tag);
@@ -31,6 +47,7 @@ function localAsset(parent, label, accept, receive) {
 }
 
 function show() {
+  const view = ++revision;
   for (const url of mediaUrls) URL.revokeObjectURL(url);
   mediaUrls = [];
   detail.replaceChildren();
@@ -90,7 +107,28 @@ function show() {
   } catch { notice.textContent = 'No se pudo leer la revisión guardada.'; }
   lyrics.readOnly = protectedTrack;
   if (protectedTrack) lyrics.placeholder = 'Tus Ojos se usa únicamente para verificar sus grabaciones y metadatos.';
-  else localAsset(label, 'Cargar letra local', '.txt,text/plain', async (_, file) => { lyrics.value = await file.text(); });
+  else localAsset(label, 'Cargar letra local', '.txt,text/plain', async (_, file) => { lyrics.dataset.edited = 'true'; lyrics.value = await file.text(); });
+  const libraryState = append(detail, 'p');
+  void library.then(async tracks => {
+    const matches = tracks.filter(item => [item.soundcloudUrl, item.permalink, item.sourceUrl].includes(track.id));
+    if (revision !== view || matches.length !== 1) return;
+    const entry = matches[0];
+    const source = musicAsset(entry.streamUrl || entry.file);
+    if (source && !audio.getAttribute('src')) audio.src = source;
+    const applyArt = (image, asset) => {
+      const path = musicAsset(asset);
+      if (!path || image.src.startsWith('blob:')) return;
+      image.src = path;
+      image.hidden = false;
+    };
+    applyArt(square, entry.cover);
+    applyArt(wide, entry.panoramicCover);
+    libraryState.textContent = ['Vinculada al catálogo Music', entry.isrc && 'ISRC ' + entry.isrc].filter(Boolean).join(' · ');
+    if (protectedTrack || !entry.id) return;
+    const full = await readJson('/api/tracks/' + encodeURIComponent(entry.id) + '/details').catch(() => entry);
+    if (revision === view && !lyrics.value && !lyrics.dataset.edited && typeof full.lyrics === 'string') lyrics.value = full.lyrics;
+  }).catch(() => {});
+  lyrics.oninput = () => { lyrics.dataset.edited = 'true'; };
   const save = append(detail, 'button', 'Guardar decisión local');
   save.onclick = () => {
     try {
@@ -116,6 +154,7 @@ byId('load').onclick = async () => {
     const soundCloud = byId('soundcloud').files[0], distroKid = byId('distrokid').files[0];
     if (!soundCloud || !distroKid) throw new Error('Selecciona ambos CSV.');
     const catalog = buildCatalog(...await Promise.all([soundCloud.text(), distroKid.text()]));
+    library = readJson('/player/library.json').then(data => Array.isArray(data.tracks) ? data.tracks : []).catch(() => []);
     ordered = reviewQueue(catalog.recordings);
     status.textContent = ordered.length + ' grabaciones de SoundCloud · ' + catalog.releases.length + ' lanzamientos históricos de DistroKid';
     renderQueue();
