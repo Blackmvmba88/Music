@@ -5,13 +5,32 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Configure Node.js 22
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm run doctor
-      - run: npm run check
+      - name: Show tool versions
+        run: |
+          node --version
+          npm --version
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check project prerequisites
+        run: npm run doctor
+      - name: Validate recording catalog (no private CSV required)
+        run: node --test scripts/test-records-catalog.mjs
+      - name: Lint source
+        run: npm run lint
+      - name: Typecheck source
+        run: npm run typecheck
+      - name: Run test suite with coverage
+        run: npm run test:coverage
+      - name: Build Vite frontend
+        run: npm run build
+      - name: Check Electron entrypoint syntax
+        run: node --check electron/main.cjs
