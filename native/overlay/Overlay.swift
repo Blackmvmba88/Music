@@ -59,6 +59,7 @@ enum OverlayPalette: String, CaseIterable, Identifiable {
 final class OverlayState: ObservableObject {
     @Published var playback: Playback?
     @Published var expanded = false
+    @Published var showingHistory = false
     @Published var sources: [String: [URL]] = [:]
     @Published var compact = false
     @Published var wide = false
@@ -75,6 +76,7 @@ struct OverlayView: View {
     let close: () -> Void
     let connect: () -> Void
     let configure: (Bool?) -> Void
+    let loadHistory: () -> [ListeningEvent]
     @AppStorage("backgroundOpacity") private var backgroundOpacity = 0.94
     @AppStorage("lyricOpacity") private var lyricOpacity = 1.0
     @AppStorage("lyricPalette") private var palette = OverlayPalette.amber
@@ -87,7 +89,12 @@ struct OverlayView: View {
                     .help("Arrastra por los bordes del panel")
                 Button {
                     state.compact = false
-                    state.expanded.toggle()
+                    if state.showingHistory {
+                        state.showingHistory = false
+                        state.expanded = true
+                    } else {
+                        state.expanded.toggle()
+                    }
                     configure(nil)
                 } label: {
                     let track = state.playback
@@ -97,10 +104,22 @@ struct OverlayView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
-                .help(state.expanded ? "Ocultar letra" : "Ver letra")
+                .help(state.expanded && !state.showingHistory ? "Ocultar letra" : "Ver letra")
                 if !state.compact && state.playback == nil {
                     Button(state.spotifyStatus, action: connect)
                         .buttonStyle(.bordered)
+                }
+                if !state.compact {
+                    Button {
+                        state.showingHistory.toggle()
+                        state.expanded = state.showingHistory
+                        configure(nil)
+                    } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(state.showingHistory ? "Cerrar historial" : "Historial de reproducción")
+                    .help(state.showingHistory ? "Cerrar historial" : "Historial de reproducción")
                 }
                 if state.expanded {
                     Button {
@@ -116,6 +135,7 @@ struct OverlayView: View {
                 if !state.compact {
                     Button {
                         state.expanded = false
+                        state.showingHistory = false
                         state.compact = true
                         configure(nil)
                     } label: { Image(systemName: "minus") }
@@ -129,7 +149,10 @@ struct OverlayView: View {
             .padding(.horizontal, 15)
             .frame(height: 48)
             .font(.system(size: 14, weight: .semibold, design: .monospaced))
-            if state.expanded {
+            if state.expanded && state.showingHistory {
+                Divider().opacity(backgroundOpacity)
+                history
+            } else if state.expanded {
                 Divider().opacity(backgroundOpacity)
                 lyrics
                 if !state.sources.isEmpty && (state.playback?.lyrics != nil || state.playback?.cues?.isEmpty == false) {
@@ -181,6 +204,40 @@ struct OverlayView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .padding(5)
         .preferredColorScheme(.dark)
+    }
+
+    private var history: some View {
+        TimelineView(.periodic(from: .now, by: 5)) { _ in
+            let events = loadHistory()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Historial de reproducción").font(.headline)
+                if events.isEmpty {
+                    Text("Aquí aparecerá tu primera escucha detectada.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(Array(events.enumerated()), id: \.offset) { _, event in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(event.title).font(.system(.body, weight: .semibold))
+                                    Text([event.artist, event.provider.capitalized,
+                                          event.timestamp.formatted(date: .abbreviated, time: .shortened)]
+                                        .filter { !$0.isEmpty }.joined(separator: " · "))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    let elapsed = Duration.seconds(event.observedSeconds).formatted(.time(pattern: .minuteSecond))
+                                    Text(event.status.map { "\(elapsed) escuchados · \($0)" }
+                                         ?? "\(elapsed) registrados · Historial anterior")
+                                        .font(.caption)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(16)
+        }
     }
 
     private func opacitySlider(_ title: String, value: Binding<Double>) -> some View {
@@ -293,6 +350,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             panel?.orderOut(nil)
         }, connect: { [weak self] in self?.connectSpotify() }, configure: { [weak self] raise in
             self?.resize(raise: raise)
+        }, loadHistory: { [weak self] in
+            self?.catalog.recentListens() ?? []
         }))
         if let area = NSScreen.main?.visibleFrame {
             panel.setFrameOrigin(NSPoint(x: area.midX - 270, y: area.minY + 42))
@@ -304,6 +363,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         }
         show()
     }
+
+    func applicationWillTerminate(_ notification: Notification) { catalog.observe(nil) }
 
     @objc private func show() { panel?.orderFrontRegardless() }
 
@@ -410,6 +471,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private func publish(_ playback: Playback?) {
         guard state.playback?.observedAtMs != playback?.observedAtMs else { return }
         guard var playback else {
+            catalog.observe(nil)
             state.playback = nil
             state.sources = [:]
             return

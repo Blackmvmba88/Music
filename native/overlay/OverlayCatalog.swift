@@ -21,6 +21,16 @@ struct CatalogEntry: Decodable {
     }
 }
 
+struct ListeningEvent: Decodable {
+    let timestamp: Date
+    let provider: String
+    let title: String
+    let artist: String
+    let observedSeconds: Int
+    let sessionId: String?
+    let status: String?
+}
+
 @MainActor
 final class OverlayCatalog {
     private let bundled: [CatalogEntry]
@@ -31,7 +41,9 @@ final class OverlayCatalog {
     private var remoteLyrics: [String: String] = [:]
     private var previous: Playback?
     private var seconds = 0.0
-    private var recorded = false
+    private var sessionId = UUID()
+    private var startedAt = Date()
+    private var lastSavedSeconds = -1
     private let directory: URL
 
     init(directory overrideDirectory: URL? = nil) {
@@ -122,34 +134,91 @@ final class OverlayCatalog {
         return text
     }
 
-    func observe(_ current: Playback) {
-        guard let id = current.trackId else { return }
-        defer { previous = current }
-        guard let last = previous, last.trackId == id, last.provider == current.provider,
-              current.observedAtMs - last.observedAtMs < 15_000 else {
-            seconds = 0
-            recorded = false
+    func observe(_ current: Playback?) {
+        guard let current, current.trackId != nil else {
+            finish(reason: "Interrumpida")
+            previous = nil
             return
         }
-        guard let before = last.positionMs, let after = current.positionMs else { return }
-        if after < 5000, before - after > 25_000 {
+        let last = previous
+        let elapsed = last.map { (current.observedAtMs - $0.observedAtMs) / 1000 } ?? 0
+        let same = last?.trackId == current.trackId && last?.provider == current.provider
+        let restarted = same && (current.positionMs ?? .infinity) < 5000 &&
+            (last?.positionMs ?? 0) - (current.positionMs ?? 0) > 25_000
+        if !same || elapsed >= 15 || restarted {
+            let reason = elapsed >= 15 ? "Interrumpida" : restarted ? "Reiniciada" : "Cambiada antes del final"
+            finish(reason: reason)
+            sessionId = UUID()
+            startedAt = Date(timeIntervalSince1970: current.observedAtMs / 1000)
             seconds = 0
-            recorded = false
-            return
+            lastSavedSeconds = -1
+        } else if let last, last.playing, current.playing,
+                  let before = last.positionMs, let after = current.positionMs {
+            let advance = (after - before) / 1000
+            if elapsed > 0, advance > 0, advance <= elapsed + 1 {
+                seconds += min(advance, elapsed)
+            }
         }
-        guard current.playing, last.playing, !recorded else { return }
-        let elapsed = (current.observedAtMs - last.observedAtMs) / 1000
-        let advance = (after - before) / 1000
-        guard elapsed > 0, advance > 0, advance <= elapsed + 1 else { return }
-        seconds += min(advance, elapsed)
-        if seconds >= 30 {
-            recorded = append(track: current, seconds: seconds)
+        previous = current
+        if current.playing && Int(seconds) >= lastSavedSeconds + 15 {
+            save(track: current, status: "En reproducción")
+        } else if same && last?.playing == true && !current.playing {
+            save(track: current, status: "Pausada")
+        } else if same && last?.playing == false && current.playing && lastSavedSeconds >= 0 {
+            save(track: current, status: "En reproducción")
         }
     }
 
-    private func append(track: Playback, seconds: Double) -> Bool {
+    private func finish(reason: String) {
+        guard let last = previous, last.playing || seconds > 0 || lastSavedSeconds >= 0 else { return }
+        let nearEnd: Bool
+        if let duration = last.durationMs, let position = last.positionMs, duration > 0 {
+            nearEnd = position >= max(duration * 0.9, duration - 6000)
+        } else {
+            nearEnd = false
+        }
+        let status = nearEnd ? "Llegó al final (estimado)"
+            : reason == "Cambiada antes del final" && last.durationMs == nil ? "Cambiada" : reason
+        save(track: last, status: status)
+    }
+
+    private func save(track: Playback, status: String) {
+        if append(track: track, seconds: seconds, status: status) {
+            lastSavedSeconds = Int(seconds)
+        }
+    }
+
+    func recentListens() -> [ListeningEvent] {
+        let file = directory.appendingPathComponent("listening-history.jsonl")
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return [] }
+        defer { try? handle.close() }
+        do {
+            let end = try handle.seekToEnd()
+            let start = end > 256_000 ? end - 256_000 : 0
+            try handle.seek(toOffset: start)
+            guard let data = try handle.read(upToCount: 256_000) else { return [] }
+            var lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
+            if start > 0 && !lines.isEmpty { lines.removeFirst() }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var seen = Set<String>()
+            var recent: [ListeningEvent] = []
+            for line in lines.reversed() {
+                guard let event = try? decoder.decode(ListeningEvent.self, from: Data(line.utf8)) else { continue }
+                if let id = event.sessionId, !seen.insert(id).inserted { continue }
+                recent.append(event)
+                if recent.count == 100 { break }
+            }
+            return recent
+        } catch {
+            return []
+        }
+    }
+
+    private func append(track: Playback, seconds: Double, status: String) -> Bool {
         let event: [String: Any] = [
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "timestamp": ISO8601DateFormatter().string(from: startedAt),
+            "sessionId": sessionId.uuidString, "status": status,
             "provider": track.provider, "trackId": track.trackId ?? "",
             "title": track.title, "artist": track.artist ?? "", "observedSeconds": Int(seconds)
         ]
