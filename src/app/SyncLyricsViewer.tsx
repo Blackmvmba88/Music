@@ -146,10 +146,11 @@ export function SyncLyricsViewer({ trackId, currentTime, theme, fallbackLyrics, 
   }
 
   if (segments.length === 0) {
-    if (fallbackLyrics) {
+    const lyricsText = fallbackLyrics?.trim() || providerLyrics.trim();
+    if (lyricsText) {
       return (
         <div className="sync-lyrics-fallback">
-          {fallbackLyrics.split('\n').map((line, i) => (
+          {lyricsText.split('\\n').map((line, i) => (
             <p key={i}>{line}</p>
           ))}
         </div>
