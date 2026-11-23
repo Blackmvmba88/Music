@@ -5,6 +5,7 @@
 <key>CFBundleIdentifier</key><string>records.blackmamba.overlay</string>
 <key>CFBundleName</key><string>BlackMamba Overlay</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>NSAppleEventsUsageDescription</key><string>Lee la canción actual de Spotify para mostrarla en la cintilla.</string>
 <key>LSUIElement</key><true/>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict></plist>

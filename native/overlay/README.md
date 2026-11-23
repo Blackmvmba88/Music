@@ -9,3 +9,5 @@ Para publicar la reproducción de Spotify, ejecuta `node native/overlay/bridge.m
 Si el catálogo de Music Engine contiene una coincidencia única por ID de Spotify o ISRC, se muestra su letra y se buscan marcas VTT por ID del catálogo. El panel no asume que las grabaciones con títulos iguales sean la misma toma.
 
 La publicación de reproducción desde Engine, SoundCloud externo y Chrome todavía requiere conectarlos al mismo archivo de estado. El panel no instala capturas de entrada, atajos globales ni monitores de mandos.
+
+Para Spotify de escritorio en la misma Mac, pulsa **Conectar Spotify** en la cintilla. La detección local consulta título, artista, posición y estado sin token OAuth. El puente con catálogo sigue siendo necesario para adjuntar letras y marcas VTT.

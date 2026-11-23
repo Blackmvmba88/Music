@@ -31,6 +31,7 @@ final class OverlayState: ObservableObject {
     @Published var expanded = false
     @Published var compact = false
     @Published var opacity = 0.94
+    @Published var spotifyStatus = "Conectar Spotify"
 }
 
 final class SubtitlePanel: NSPanel {
@@ -41,6 +42,7 @@ final class SubtitlePanel: NSPanel {
 struct OverlayView: View {
     @ObservedObject var state: OverlayState
     let close: () -> Void
+    let connect: () -> Void
     let configure: (Bool?) -> Void
 
     var body: some View {
@@ -62,6 +64,10 @@ struct OverlayView: View {
                 }
                 .buttonStyle(.plain)
                 .help(state.expanded ? "Ocultar letra" : "Ver letra")
+                if !state.compact && state.playback == nil {
+                    Button(state.spotifyStatus, action: connect)
+                        .buttonStyle(.bordered)
+                }
                 if !state.compact {
                     Button {
                         state.expanded = false
@@ -143,10 +149,18 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private var timer: Timer?
     private var statusItem: NSStatusItem?
     private var elevated = false
+    private var spotifyEnabled = false
+    private var nextSpotifyRead = Date.distantPast
+    private var spotifyTask: Process?
+    private var spotifyPlayback: Playback?
+    private var spotifyMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let menu = NSMenu()
         menu.addItem(withTitle: "Mostrar cintilla", action: #selector(show), keyEquivalent: "").target = self
+        let spotifyItem = menu.addItem(withTitle: "Conectar Spotify local", action: #selector(connectSpotify), keyEquivalent: "")
+        spotifyItem.target = self
+        spotifyMenuItem = spotifyItem
         menu.addItem(withTitle: "Salir", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.title = "♪"
@@ -168,7 +182,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.contentView = NSHostingView(rootView: OverlayView(state: state, close: { [weak panel] in
             panel?.orderOut(nil)
-        }, configure: { [weak self] raise in
+        }, connect: { [weak self] in self?.connectSpotify() }, configure: { [weak self] raise in
             self?.resize(raise: raise)
         }))
         if let area = NSScreen.main?.visibleFrame {
@@ -198,14 +212,83 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
     }
 
+    @objc private func connectSpotify() {
+        spotifyEnabled = true
+        nextSpotifyRead = .distantPast
+        spotifyMenuItem?.title = "Consultando Spotify…"
+        state.spotifyStatus = "Consultando…"
+        pollSpotify()
+    }
+
+    private func pollSpotify() {
+        guard spotifyEnabled, spotifyTask == nil, Date() >= nextSpotifyRead else { return }
+        nextSpotifyRead = Date().addingTimeInterval(3)
+        guard !NSRunningApplication.runningApplications(withBundleIdentifier: "com.spotify.client").isEmpty else {
+            spotifyPlayback = nil
+            return
+        }
+
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", """
+            tell application "/Applications/Spotify.app"
+                if player state is stopped then return ""
+                set t to current track
+                return (name of t) & linefeed & (artist of t) & linefeed & (spotify url of t) & linefeed & ((player position) as text) & linefeed & ((player state is playing) as text)
+            end tell
+            """]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] child in
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            let fields = String(decoding: data, as: UTF8.self)
+                .trimmingCharacters(in: .newlines).components(separatedBy: "\n")
+            let status = child.terminationStatus
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.spotifyTask = nil
+                if status != 0 {
+                    self.spotifyEnabled = false
+                    self.spotifyPlayback = nil
+                    self.spotifyMenuItem?.title = "Spotify sin acceso · Reintentar"
+                    self.state.spotifyStatus = "Reintentar Spotify"
+                } else if fields.count == 5 {
+                    self.spotifyMenuItem?.title = "Spotify conectado"
+                    self.spotifyPlayback = Playback(
+                        title: fields[0], artist: fields[1], provider: "spotify",
+                        trackId: fields[2].split(separator: ":").last.map(String.init),
+                        playing: fields[4] == "true",
+                        positionMs: Double(fields[3].replacingOccurrences(of: ",", with: ".")).map { $0 * 1000 },
+                        observedAtMs: Date().timeIntervalSince1970 * 1000, lyrics: nil, cues: nil
+                    )
+                } else {
+                    self.spotifyPlayback = nil
+                    self.spotifyMenuItem?.title = "Spotify conectado · En espera"
+                    self.state.spotifyStatus = "Spotify en espera"
+                }
+                self.poll()
+            }
+        }
+        do {
+            try process.run()
+            spotifyTask = process
+        } catch {
+            spotifyEnabled = false
+            spotifyMenuItem?.title = "Spotify sin acceso · Reintentar"
+            state.spotifyStatus = "Reintentar Spotify"
+        }
+    }
+
     private func poll() {
+        pollSpotify()
         let path = ProcessInfo.processInfo.environment["BLACKMAMBA_NOW_PLAYING_FILE"]
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support/BlackMamba Overlay/now-playing.json").path
         guard let data = FileManager.default.contents(atPath: path),
               let playback = try? JSONDecoder().decode(Playback.self, from: data),
               abs(Date().timeIntervalSince1970 * 1000 - playback.observedAtMs) < 15_000 else {
-            if state.playback != nil { state.playback = nil }
+            if state.playback?.observedAtMs != spotifyPlayback?.observedAtMs { state.playback = spotifyPlayback }
             return
         }
         if state.playback?.observedAtMs != playback.observedAtMs { state.playback = playback }
