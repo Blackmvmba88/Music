@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from "react";
+import type { Recording, ResolveResult } from "../lyrics/resolver";
 
 type LyricSegment = {
   start: number;
@@ -62,39 +63,57 @@ interface SyncLyricsViewerProps {
   currentTime: number;
   theme: { accent: string; glow: string };
   fallbackLyrics?: string;
+  /** Optional authorized-provider resolution when a local VTT is missing. */
+  recording?: Recording;
+  lyricsResolver?: { resolve(recording: Recording): Promise<ResolveResult> };
 }
 
-export function SyncLyricsViewer({ trackId, currentTime, theme, fallbackLyrics }: SyncLyricsViewerProps) {
+export function SyncLyricsViewer({ trackId, currentTime, theme, fallbackLyrics, recording, lyricsResolver }: SyncLyricsViewerProps) {
   const [segments, setSegments] = useState<LyricSegment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [providerLyrics, setProviderLyrics] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
-    
-    // Fetch the VTT file for this track
-    fetch(`/lyrics/${trackId}.vtt`)
-      .then(res => {
-        if (!res.ok) throw new Error("No VTT found");
-        return res.text();
-      })
-      .then(text => {
-        if (!active) return;
-        setSegments(parseVTT(text));
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!active) return;
-        setSegments([]);
-        setLoading(false);
-      });
+    setSegments([]);
+    setProviderLyrics("");
 
-    return () => {
-      active = false;
-    };
-  }, [trackId]);
+    async function loadLyrics() {
+      let timed: LyricSegment[] = [];
+      let plain = "";
+      try {
+        // Prefer the existing local synchronized asset; external adapters are optional.
+        const response = await fetch(`/lyrics/${encodeURIComponent(trackId)}.vtt`);
+        if (response.ok) timed = parseVTT(await response.text());
+      } catch {
+        // Missing VTT is non-fatal; providers can still supply verified lyrics.
+      }
+      if (timed.length === 0 && recording && lyricsResolver) {
+        try {
+          const result = await lyricsResolver.resolve(recording);
+          if (result.status === "found") {
+            const lines = result.candidate.timedLines ?? [];
+            timed = lines.filter(line =>
+              Number.isFinite(line.start) && Number.isFinite(line.end) &&
+              line.start >= 0 && line.end > line.start && Boolean(line.text.trim())
+            );
+            plain = result.candidate.text;
+          }
+        } catch {
+          // A provider failure must never interrupt player rendering.
+        }
+      }
+      if (!active) return;
+      setSegments(timed);
+      setProviderLyrics(plain);
+      setLoading(false);
+    }
+    void loadLyrics();
+    return () => { active = false; };
+  }, [trackId, recording, lyricsResolver]);
 
   // Find active segment
   const activeIndex = useMemo(() => {
