@@ -68,11 +68,27 @@ final class OverlayCatalog {
         return userBank.isEmpty ? bundledBank : userBank
     }
 
-    func importedText(for track: Playback) -> String? {
+    private func lyricFile(for track: Playback) -> URL? {
         guard track.provider == "spotify", let id = track.trackId,
               id.range(of: #"^[A-Za-z0-9]{22}$"#, options: .regularExpression) != nil else { return nil }
-        let file = directory.appendingPathComponent("lyrics", isDirectory: true)
+        return directory.appendingPathComponent("lyrics", isDirectory: true)
             .appendingPathComponent(id + ".txt")
+    }
+
+    func saveImportedText(_ input: String, for track: Playback) throws -> String {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.utf8.count <= 64_000, let file = lyricFile(for: track) else {
+            throw CocoaError(.fileWriteInapplicableStringEncoding)
+        }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try Data(text.utf8).write(to: file, options: [.atomic])
+        return text
+    }
+
+    func importedText(for track: Playback) -> String? {
+        guard let file = lyricFile(for: track) else { return nil }
         guard let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
               size > 0, size <= 64_000,
               let content = try? String(contentsOf: file, encoding: .utf8) else { return nil }

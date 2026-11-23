@@ -60,6 +60,7 @@ final class OverlayState: ObservableObject {
     @Published var playback: Playback?
     @Published var expanded = false
     @Published var showingHistory = false
+    @Published var lyricImportMessage: String?
     @Published var sources: [String: [URL]] = [:]
     @Published var compact = false
     @Published var wide = false
@@ -77,6 +78,7 @@ struct OverlayView: View {
     let connect: () -> Void
     let configure: (Bool?) -> Void
     let loadHistory: () -> [ListeningEvent]
+    let pasteLyrics: (Playback) -> Void
     @AppStorage("backgroundOpacity") private var backgroundOpacity = 0.94
     @AppStorage("lyricOpacity") private var lyricOpacity = 1.0
     @AppStorage("lyricPalette") private var palette = OverlayPalette.amber
@@ -264,10 +266,30 @@ struct OverlayView: View {
                let id = track.trackId, id.range(of: #"^[A-Za-z0-9]{22}$"#, options: .regularExpression) != nil,
                let url = URL(string: "https://open.spotify.com/track/\(id)") {
                 Link("Ver pista en Spotify", destination: url).font(.body)
+                Button("Pegar y guardar letra") { pasteLyrics(track) }
+                    .font(.body)
+            }
+            if (state.sources["Letra"] ?? []).isEmpty,
+               let url = lyricsSearchURL(for: track) {
+                Link("Buscar letra por canción y artista", destination: url).font(.body)
+            }
+            if let message = state.lyricImportMessage {
+                Text(message).font(.caption)
             }
         } else {
             Text("Esperando reproducción")
         }
+    }
+
+    private func lyricsSearchURL(for track: Playback) -> URL? {
+        var url = URLComponents()
+        url.scheme = "https"
+        url.host = "www.google.com"
+        url.path = "/search"
+        let query = [track.title, track.artist].compactMap { $0 }
+            .map { "\"\($0)\"" }.joined(separator: " ")
+        url.queryItems = [URLQueryItem(name: "q", value: query + " lyrics")]
+        return url.url
     }
 
     private var lyrics: some View {
@@ -352,6 +374,8 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             self?.resize(raise: raise)
         }, loadHistory: { [weak self] in
             self?.catalog.recentListens() ?? []
+        }, pasteLyrics: { [weak self] track in
+            self?.importLyrics(for: track)
         }))
         if let area = NSScreen.main?.visibleFrame {
             panel.setFrameOrigin(NSPoint(x: area.midX - 270, y: area.minY + 42))
@@ -468,8 +492,26 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         publish(playback)
     }
 
+    private func importLyrics(for track: Playback) {
+        guard let current = state.playback, current.trackId == track.trackId,
+              current.provider == track.provider else { return }
+        guard let clipboard = NSPasteboard.general.string(forType: .string), !clipboard.isEmpty else {
+            state.lyricImportMessage = "No hay texto en el portapapeles."
+            return
+        }
+        do {
+            state.playback?.lyrics = try catalog.saveImportedText(clipboard, for: current)
+            state.lyricImportMessage = nil
+        } catch {
+            state.lyricImportMessage = "No se pudo guardar la letra para esta pista."
+        }
+    }
+
     private func publish(_ playback: Playback?) {
         guard state.playback?.observedAtMs != playback?.observedAtMs else { return }
+        if state.playback?.trackId != playback?.trackId || state.playback?.provider != playback?.provider {
+            state.lyricImportMessage = nil
+        }
         guard var playback else {
             catalog.observe(nil)
             state.playback = nil
