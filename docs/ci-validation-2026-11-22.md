@@ -43,3 +43,22 @@ node --check electron/main.cjs
 4. Add read-only Musica/suno-suite adapter validation with synthetic fixtures; require separate explicit authorization for publication.
 
 No merge, release, distribution upload or music publication was performed.
+
+## Follow-up verification (2026-11-22, current session)
+
+- PR #28 remains open, draft, unmerged; inspected head `9349e61887c5e27e0126ee4a8f1630a3f796c9a5`.
+- Its CI run #126, ID `45055200558`, completed with failure. Latest-attempt jobs: catalog `137308767213`, coverage `137308767473`, quality `137308767513`, vite-electron `137308767528`; all four conclusions were failure and all returned `steps: null`.
+- Download of catalog job logs returned HTTP 404 `BlobNotFound` again. **No root cause is established**, and there is no proof that npm, tests or build began.
+- The CI workflow names all four independent matrix stages, runs `npm ci`, `npm run doctor`, then stage-specific commands. Checked against branch `package.json`: build is `tsc -b && vite build`; desktop smoke test must be separate from this Linux frontend/entrypoint check.
+- Desktop Commander lists `Mac-mini-de-IyariGomez.local` **offline**, last seen approximately 32 hours earlier. No native overlay, Xbox input, Electron playback or latency measurement was performed.
+- WARPBLACK PR #27 (head `4c229771c856e5d4f41e483a375e547bcb1e120e`) is **closed**; its CI run #347, ID `44981412869`, job `test` ID `137083388292`, concluded failure, with `steps: null`. Logs also returned 404 `BlobNotFound`. This cannot establish that pytest or Ruff failed. Closed does not imply merged.
+- Observed dashboard snapshots: SoundCloud 7,080 plays, +85%, for Nov 17–23 as displayed; DistroKid all-service last-seven-day 191, -58%. Windows, publication delays and platform scope are not proven aligned; **do not infer platform migration or sum as a synchronized total**. SoundCloud highlighted Midnight Glow 564, En la penumbra 306, Desde 282 plays. These are observational figures from screenshots, not API-validated ingestion.
+
+### Next verification gates
+
+1. Restore access to an actual job log or step breakdown, or reproduce the common CI prerequisite locally; only then apply a code-level fix.
+2. Once authorized Mac becomes online, run locked install, doctor, catalog test, lint, typecheck, coverage, Vite build, Electron entry syntax and separate Electron playback smoke test, recording exit codes.
+3. Test overlay non-activating panel and external metadata adapters separately; inspect controller availability and measure p50/p95/p99 before claiming keyboard/gamepad acceptance.
+4. Align exported analytics by date, timezone, reporting lag, platform and track ID before enabling cross-service attribution.
+
+This update documents evidence only; no production changes, main merge or music publishing were performed.
