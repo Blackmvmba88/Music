@@ -12,3 +12,5 @@ fi
 swiftc -parse-as-library -target "$(uname -m)-apple-macosx14.0" \
   -module-cache-path "$destination/swift-module-cache" "$source_dir/Overlay.swift" "$source_dir/OverlayCatalog.swift" \
   -o "$bundle/Contents/MacOS/BlackMambaOverlay"
+codesign --force --sign - "$bundle"
+codesign --verify --strict "$bundle"
