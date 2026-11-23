@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import ServiceManagement
 
 struct Cue: Decodable {
     let start: Double
@@ -56,6 +57,22 @@ enum OverlayPalette: String, CaseIterable, Identifiable {
     }
 }
 
+enum OverlayPreferences {
+    static let store = UserDefaults(suiteName: "records.blackmamba.overlay.preferences") ?? .standard
+
+    static func migrate() {
+        guard !store.bool(forKey: "didMigrateAppearance") else { return }
+        let domains = [UserDefaults.standard, UserDefaults(suiteName: "records.blackmamba.overlay.history"),
+                       UserDefaults(suiteName: "records.blackmamba.overlay.appearance")]
+        for key in ["backgroundOpacity", "lyricOpacity", "lyricPalette"] where store.object(forKey: key) == nil {
+            if let value = domains.compactMap({ $0?.object(forKey: key) }).first {
+                store.set(value, forKey: key)
+            }
+        }
+        store.set(true, forKey: "didMigrateAppearance")
+    }
+}
+
 final class OverlayState: ObservableObject {
     @Published var playback: Playback?
     @Published var expanded = false
@@ -79,9 +96,9 @@ struct OverlayView: View {
     let configure: (Bool?) -> Void
     let loadHistory: () -> [ListeningEvent]
     let pasteLyrics: (Playback) -> Void
-    @AppStorage("backgroundOpacity") private var backgroundOpacity = 0.94
-    @AppStorage("lyricOpacity") private var lyricOpacity = 1.0
-    @AppStorage("lyricPalette") private var palette = OverlayPalette.amber
+    @AppStorage("backgroundOpacity", store: OverlayPreferences.store) private var backgroundOpacity = 0.94
+    @AppStorage("lyricOpacity", store: OverlayPreferences.store) private var lyricOpacity = 1.0
+    @AppStorage("lyricPalette", store: OverlayPreferences.store) private var palette = OverlayPalette.amber
 
     var body: some View {
         VStack(spacing: 0) {
@@ -344,11 +361,16 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     private var spotifyMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        spotifyEnabled = OverlayPreferences.store.bool(forKey: "spotifyConnected")
+        if spotifyEnabled { state.spotifyStatus = "Spotify en espera" }
         let menu = NSMenu()
         menu.addItem(withTitle: "Mostrar cintilla", action: #selector(show), keyEquivalent: "").target = self
         let spotifyItem = menu.addItem(withTitle: "Conectar Spotify local", action: #selector(connectSpotify), keyEquivalent: "")
         spotifyItem.target = self
         spotifyMenuItem = spotifyItem
+        let login = menu.addItem(withTitle: "Iniciar con macOS", action: #selector(toggleLogin), keyEquivalent: "")
+        login.target = self
+        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(withTitle: "Salir", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.title = "♪"
@@ -389,6 +411,26 @@ final class OverlayController: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) { catalog.observe(nil) }
+
+    @objc private func toggleLogin(_ item: NSMenuItem) {
+        do {
+            let service = SMAppService.mainApp
+            if service.status == .enabled {
+                try service.unregister()
+            } else {
+                try service.register()
+            }
+            item.state = service.status == .enabled ? .on : .off
+            if service.status == .requiresApproval {
+                SMAppService.openSystemSettingsLoginItems()
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "No se pudo cambiar el arranque automático"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+    }
 
     @objc private func show() { panel?.orderFrontRegardless() }
 
@@ -451,6 +493,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                     self.spotifyMenuItem?.title = "Spotify sin acceso · Reintentar"
                     self.state.spotifyStatus = "Reintentar Spotify"
                 } else if fields.count == 6 {
+                    OverlayPreferences.store.set(true, forKey: "spotifyConnected")
                     self.spotifyMenuItem?.title = "Spotify conectado"
                     self.spotifyPlayback = Playback(
                         title: fields[0], artist: fields[1], provider: "spotify",
@@ -461,6 +504,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                         observedAtMs: Date().timeIntervalSince1970 * 1000, lyrics: nil, cues: nil
                     )
                 } else {
+                    OverlayPreferences.store.set(true, forKey: "spotifyConnected")
                     self.spotifyPlayback = nil
                     self.spotifyMenuItem?.title = "Spotify conectado · En espera"
                     self.state.spotifyStatus = "Spotify en espera"
@@ -554,6 +598,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
 @main
 struct OverlayMain {
     @MainActor static func main() {
+        OverlayPreferences.migrate()
         let app = NSApplication.shared
         let controller = OverlayController()
         app.setActivationPolicy(.accessory)
