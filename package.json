@@ -79,7 +79,7 @@
     "@types/react-dom": "19.1.7",
     "@vitejs/plugin-react": "6.0.3",
     "@vitest/coverage-v8": "4.1.10",
-    "electron": "^43.1.0",
+    "electron": "^43.8.1",
     "electron-builder": "^26.15.3",
     "eslint": "9.33.0",
     "eslint-plugin-react-hooks": "5.2.0",
