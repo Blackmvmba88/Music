@@ -62,3 +62,8 @@ No merge, release, distribution upload or music publication was performed.
 4. Align exported analytics by date, timezone, reporting lag, platform and track ID before enabling cross-service attribution.
 
 This update documents evidence only; no production changes, main merge or music publishing were performed.
+
+### PR state cross-check
+
+- GitHub PR metadata was subsequently checked directly: WARPBLACK PR #27 is **merged=true**, state closed. Its head CI run was still failed; merge status does not establish passing tests. This was a pre-existing merge, **not performed in this session**.
+- Music PR #28 is **open**, **draft**, **merged=false**, head `069d6293402706a8ef16c1591e2c3ee1baaf1157` at this check. No merge performed.
