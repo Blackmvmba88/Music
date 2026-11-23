@@ -45,6 +45,23 @@ async function createWindow() {
   return window;
 }
 
+let spotifyReader;
+ipcMain.handle('read-spotify-playback', async (event) => {
+  if (!localOrigin || !window || event.sender !== window.webContents ||
+      event.senderFrame !== event.sender.mainFrame ||
+      new URL(event.senderFrame.url).origin !== localOrigin) return null;
+
+  if (!process.env.SPOTIFY_ACCESS_TOKEN) return null;
+  spotifyReader ??= import('./playback-sources.mjs').then(({ createSpotifyPlaybackReader }) =>
+    createSpotifyPlaybackReader({ getAccessToken: () => process.env.SPOTIFY_ACCESS_TOKEN })
+  );
+  const read = await spotifyReader;
+  const result = await read();
+  return result.status === 'ready'
+    ? { title: result.state.title, playing: result.state.playing }
+    : null;
+});
+
 let sunoWindow = null;
 function openSunoWindow() {
   if (sunoWindow && !sunoWindow.isDestroyed()) { sunoWindow.focus(); return; }

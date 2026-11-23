@@ -19,6 +19,7 @@ import { Palette } from "@phosphor-icons/react/Palette";
 import { ArrowUp } from "@phosphor-icons/react/ArrowUp";
 import { ArrowDown } from "@phosphor-icons/react/ArrowDown";
 import { AudioVisualizer } from "./AudioVisualizer";
+import { NowPlayingTicker } from "./NowPlayingTicker";
 import { SyncLyricsViewer } from "./SyncLyricsViewer";
 import { loadCatalog, loadRatings, loadTrackDetails, persistRatings } from "../api/catalog";
 
@@ -1139,6 +1140,11 @@ export function App() {
           Escuchar ahora
         </a>
       </nav>
+      <NowPlayingTicker
+        engineTitle={playing ? track?.title : undefined}
+        engineArtist={track?.artist}
+        enginePlatform={track?.streamUrl ? "SoundCloud" : "Music Engine"}
+      />
 
       {layout === "focus" && (
         <section className="hero" id="top">
