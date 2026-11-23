@@ -27,12 +27,41 @@ struct Playback: Decodable {
     }
 }
 
+enum OverlayPalette: String, CaseIterable, Identifiable {
+    case amber = "Ámbar", cyan = "Cian", violet = "Violeta", emerald = "Esmeralda"
+    case rose = "Rosa", white = "Blanco"
+
+    var id: String { rawValue }
+
+    var ink: Color {
+        switch self {
+        case .amber: Color(red: 1, green: 0.8, blue: 0.47)
+        case .cyan: Color(red: 0.46, green: 0.92, blue: 1)
+        case .violet: Color(red: 0.82, green: 0.70, blue: 1)
+        case .emerald: Color(red: 0.47, green: 1, blue: 0.72)
+        case .rose: Color(red: 1, green: 0.64, blue: 0.77)
+        case .white: .white
+        }
+    }
+
+    var backdrop: Color {
+        switch self {
+        case .amber: Color(red: 0.08, green: 0.06, blue: 0.04)
+        case .cyan: Color(red: 0.025, green: 0.10, blue: 0.14)
+        case .violet: Color(red: 0.13, green: 0.06, blue: 0.20)
+        case .emerald: Color(red: 0.035, green: 0.13, blue: 0.095)
+        case .rose: Color(red: 0.16, green: 0.05, blue: 0.095)
+        case .white: Color(white: 0.075)
+        }
+    }
+}
+
 final class OverlayState: ObservableObject {
     @Published var playback: Playback?
     @Published var expanded = false
     @Published var sources: [String: [URL]] = [:]
     @Published var compact = false
-    @Published var opacity = 0.94
+    @Published var wide = false
     @Published var spotifyStatus = "Conectar Spotify"
 }
 
@@ -46,6 +75,9 @@ struct OverlayView: View {
     let close: () -> Void
     let connect: () -> Void
     let configure: (Bool?) -> Void
+    @AppStorage("backgroundOpacity") private var backgroundOpacity = 0.94
+    @AppStorage("lyricOpacity") private var lyricOpacity = 1.0
+    @AppStorage("lyricPalette") private var palette = OverlayPalette.amber
 
     var body: some View {
         VStack(spacing: 0) {
@@ -70,6 +102,17 @@ struct OverlayView: View {
                     Button(state.spotifyStatus, action: connect)
                         .buttonStyle(.bordered)
                 }
+                if state.expanded {
+                    Button {
+                        state.wide.toggle()
+                        configure(nil)
+                    } label: {
+                        Image(systemName: state.wide ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(state.wide ? "Reducir panel" : "Ampliar panel")
+                    .help(state.wide ? "Reducir panel" : "Ampliar panel")
+                }
                 if !state.compact {
                     Button {
                         state.expanded = false
@@ -87,7 +130,7 @@ struct OverlayView: View {
             .frame(height: 48)
             .font(.system(size: 14, weight: .semibold, design: .monospaced))
             if state.expanded {
-                Divider()
+                Divider().opacity(backgroundOpacity)
                 lyrics
                 if !state.sources.isEmpty {
                     HStack {
@@ -106,27 +149,50 @@ struct OverlayView: View {
                     }
                     .padding(.horizontal, 12)
                 }
-                HStack {
-                    Text("Transparencia")
-                    Slider(value: $state.opacity, in: 0.35...1)
-                        .accessibilityLabel("Transparencia")
-                    Menu("Nivel") {
-                        Button("Flotante") { configure(false) }
-                        Button("Sobre otras ventanas flotantes") { configure(true) }
+                VStack(spacing: 6) {
+                    HStack {
+                        opacitySlider("Fondo", value: $backgroundOpacity)
+                        opacitySlider("Letras", value: $lyricOpacity)
                     }
-                    Button("Cerrar letra") {
-                        state.expanded = false
-                        configure(nil)
+                    HStack {
+                        Menu("Color: \(palette.rawValue)") {
+                            Picker("Color", selection: $palette) {
+                                ForEach(OverlayPalette.allCases) { option in
+                                    Text(option.rawValue).tag(option)
+                                }
+                            }
+                        }
+                        Menu("Nivel") {
+                            Button("Flotante") { configure(false) }
+                            Button("Sobre otras ventanas flotantes") { configure(true) }
+                        }
+                        Spacer()
+                        Button("Cerrar letra") {
+                            state.expanded = false
+                            configure(nil)
+                        }
                     }
                 }
                 .padding(12)
             }
         }
-        .foregroundStyle(Color(red: 1, green: 0.8, blue: 0.47))
-        .background(Color(red: 0.08, green: 0.06, blue: 0.04).opacity(state.opacity))
+        .foregroundStyle(palette.ink)
+        .background(palette.backdrop.opacity(backgroundOpacity))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .padding(5)
         .preferredColorScheme(.dark)
+    }
+
+    private func opacitySlider(_ title: String, value: Binding<Double>) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+            Slider(value: value, in: 0...1, step: 0.01)
+                .accessibilityLabel("Opacidad de \(title.lowercased())")
+            Text("\(Int((value.wrappedValue * 100).rounded())) %")
+                .font(.caption.monospacedDigit())
+                .frame(minWidth: 42, alignment: .trailing)
+                .accessibilityHidden(true)
+        }
     }
 
     private var lyrics: some View {
@@ -144,12 +210,13 @@ struct OverlayView: View {
                             ForEach(cues.indices, id: \.self) { index in
                                 Text(cues[index].text)
                                     .fontWeight(index == active ? .bold : .regular)
-                                    .foregroundStyle(index == active ? Color.white : Color(white: 0.72))
+                                    .foregroundStyle(index == active ? palette.ink : palette.ink.opacity(0.68))
                                     .id(index)
                             }
                         }
                     }
-                    .font(.system(size: 24))
+                    .font(.system(size: state.wide ? 36 : 24))
+                    .opacity(lyricOpacity)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(20)
                 }
@@ -223,9 +290,12 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         if let raise { elevated = raise }
         panel.level = elevated ? .statusBar : .floating
         let old = panel.frame
-        let width: CGFloat = state.compact ? 106 : 540
-        let height: CGFloat = state.expanded ? 340 : 58
         let area = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let wide = state.expanded && state.wide
+        let desiredWidth: CGFloat = state.compact ? 106 : wide ? 960 : 540
+        let desiredHeight: CGFloat = state.expanded ? wide ? 630 : 370 : 58
+        let width = min(desiredWidth, area?.width ?? desiredWidth)
+        let height = min(desiredHeight, area?.height ?? desiredHeight)
         let candidate = old.midX - width / 2
         let x = area.map { max($0.minX, min(candidate, $0.maxX - width)) } ?? candidate
         let y = area.map { max($0.minY, min(old.minY, $0.maxY - height)) } ?? old.minY
