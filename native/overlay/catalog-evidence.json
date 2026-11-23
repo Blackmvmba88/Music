@@ -59,5 +59,19 @@
         "https://open.spotify.com/track/26VpSNPXuAx0r5rJBeTQYa"
       ]
     }
+  },
+  {
+    "title": "Your Favorite",
+    "artist": "Solpulse",
+    "durationMs": 201409,
+    "spotifyId": "5pUUuNppKrdszB0nKnEFhc",
+    "sources": {
+      "Letra": [
+        "https://music.apple.com/us/song/your-favorite/1851490009"
+      ],
+      "Spotify": [
+        "https://open.spotify.com/track/5pUUuNppKrdszB0nKnEFhc"
+      ]
+    }
   }
 ]
