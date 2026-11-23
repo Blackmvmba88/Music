@@ -31,6 +31,12 @@ jobs:
       - name: Test recording catalog
         if: matrix.stage == 'catalog'
         run: node --test scripts/test-records-catalog.mjs
+      - name: Test universal lyrics resolver with synthetic providers
+        if: matrix.stage == 'catalog'
+        run: node --experimental-strip-types --test scripts/test-lyrics-resolver.mjs
+      - name: Test synchronized lyrics VTT parser
+        if: matrix.stage == 'catalog'
+        run: node --experimental-strip-types --test scripts/test-lyrics-vtt.mjs
       - name: Lint source
         if: matrix.stage == 'quality'
         run: npm run lint
