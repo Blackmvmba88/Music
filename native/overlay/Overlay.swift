@@ -14,9 +14,10 @@ struct Playback: Decodable {
     let trackId: String?
     let playing: Bool
     let positionMs: Double?
+    var durationMs: Double? = nil
     let observedAtMs: Double
-    let lyrics: String?
-    let cues: [Cue]?
+    var lyrics: String?
+    var cues: [Cue]?
 
     var position: Double? {
         positionMs.map { value in
@@ -29,6 +30,7 @@ struct Playback: Decodable {
 final class OverlayState: ObservableObject {
     @Published var playback: Playback?
     @Published var expanded = false
+    @Published var sources: [String: [URL]] = [:]
     @Published var compact = false
     @Published var opacity = 0.94
     @Published var spotifyStatus = "Conectar Spotify"
@@ -87,6 +89,23 @@ struct OverlayView: View {
             if state.expanded {
                 Divider()
                 lyrics
+                if !state.sources.isEmpty {
+                    HStack {
+                        ForEach(["DistroKid", "SoundCloud", "Suno"], id: \.self) { name in
+                            let urls = state.sources[name] ?? []
+                            if !urls.isEmpty {
+                                Menu(name) {
+                                    ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+                                        Link(urls.count == 1 ? "Abrir en \(name)" : "\(name) · candidato \(index + 1)", destination: url)
+                                    }
+                                }
+                            } else {
+                                Text("\(name) · pendiente")
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                }
                 HStack {
                     Text("Transparencia")
                     Slider(value: $state.opacity, in: 0.35...1)
@@ -145,6 +164,7 @@ struct OverlayView: View {
 @MainActor
 final class OverlayController: NSObject, NSApplicationDelegate {
     private let state = OverlayState()
+    private let catalog = OverlayCatalog()
     private var panel: SubtitlePanel?
     private var timer: Timer?
     private var statusItem: NSStatusItem?
@@ -235,7 +255,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
             tell application "/Applications/Spotify.app"
                 if player state is stopped then return ""
                 set t to current track
-                return (name of t) & linefeed & (artist of t) & linefeed & (spotify url of t) & linefeed & ((player position) as text) & linefeed & ((player state is playing) as text)
+                return (name of t) & linefeed & (artist of t) & linefeed & (spotify url of t) & linefeed & ((duration of t) as text) & linefeed & ((player position) as text) & linefeed & ((player state is playing) as text)
             end tell
             """]
         process.standardOutput = output
@@ -253,13 +273,14 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                     self.spotifyPlayback = nil
                     self.spotifyMenuItem?.title = "Spotify sin acceso · Reintentar"
                     self.state.spotifyStatus = "Reintentar Spotify"
-                } else if fields.count == 5 {
+                } else if fields.count == 6 {
                     self.spotifyMenuItem?.title = "Spotify conectado"
                     self.spotifyPlayback = Playback(
                         title: fields[0], artist: fields[1], provider: "spotify",
                         trackId: fields[2].split(separator: ":").last.map(String.init),
-                        playing: fields[4] == "true",
-                        positionMs: Double(fields[3].replacingOccurrences(of: ",", with: ".")).map { $0 * 1000 },
+                        playing: fields[5] == "true",
+                        positionMs: Double(fields[4].replacingOccurrences(of: ",", with: ".")).map { $0 * 1000 },
+                        durationMs: Double(fields[3]),
                         observedAtMs: Date().timeIntervalSince1970 * 1000, lyrics: nil, cues: nil
                     )
                 } else {
@@ -288,11 +309,42 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         guard let data = FileManager.default.contents(atPath: path),
               let playback = try? JSONDecoder().decode(Playback.self, from: data),
               abs(Date().timeIntervalSince1970 * 1000 - playback.observedAtMs) < 15_000 else {
-            if state.playback?.observedAtMs != spotifyPlayback?.observedAtMs { state.playback = spotifyPlayback }
+            publish(spotifyPlayback)
             return
         }
-        if state.playback?.observedAtMs != playback.observedAtMs { state.playback = playback }
+        publish(playback)
     }
+
+    private func publish(_ playback: Playback?) {
+        guard state.playback?.observedAtMs != playback?.observedAtMs else { return }
+        guard var playback else {
+            state.playback = nil
+            state.sources = [:]
+            return
+        }
+        catalog.observe(playback)
+        let (entry, exact) = catalog.resolve(playback)
+        state.sources = entry?.sources ?? [:]
+        if exact {
+            playback.lyrics = playback.lyrics ?? entry?.lyrics
+            playback.cues = playback.cues ?? entry?.cues
+        }
+        if playback.lyrics == nil, playback.cues?.isEmpty != false,
+           let urls = entry?.sources["SoundCloud"], urls.count == 1, let url = urls.first {
+            playback.lyrics = catalog.cachedLyrics(for: url)
+            if playback.lyrics == nil, let id = playback.trackId {
+                Task { [weak self] in
+                    guard let self, let lyrics = await self.catalog.fetchLyrics(for: url),
+                          self.state.playback?.trackId == id,
+                          self.state.playback?.provider == playback.provider,
+                          self.state.playback?.lyrics == nil else { return }
+                    self.state.playback?.lyrics = lyrics
+                }
+            }
+        }
+        state.playback = playback
+    }
+
 }
 
 @main

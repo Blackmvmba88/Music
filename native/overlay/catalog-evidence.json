@@ -1,0 +1,37 @@
+[
+  {
+    "title": "Delirio",
+    "artist": "Iyari Gomez",
+    "durationMs": 393419,
+    "sources": {
+      "DistroKid": [
+        "https://distrokid.com/hyperfollow/iyarigomez/delirio"
+      ],
+      "SoundCloud": [
+        "https://soundcloud.com/iyari-c/delirio-0m00s-6m33s-2"
+      ],
+      "Suno": [
+        "https://suno.com/song/e41c1c5b-2257-4589-bcf1-51d693183a45",
+        "https://suno.com/song/577b588e-5f71-420c-ae57-a5425e9ec22e"
+      ]
+    },
+    "spotifyId": "05sYQ8CYIrLKN4YGuyXi01"
+  },
+  {
+    "title": "Bajo Astral",
+    "artist": "Iyari Gomez",
+    "durationMs": 140960,
+    "sources": {
+      "DistroKid": [
+        "https://distrokid.com/hyperfollow/iyarigomez/bajo-astral"
+      ],
+      "SoundCloud": [
+        "https://soundcloud.com/iyari-c/bajo-astral"
+      ],
+      "Suno": [
+        "https://suno.com/song/577a095a-3fd0-41ee-bbae-76449522e0fa"
+      ]
+    },
+    "spotifyId": "61XkjIUOSc3vUPaiqE4Weh"
+  }
+]

@@ -10,4 +10,10 @@ Si el catálogo de Music Engine contiene una coincidencia única por ID de Spoti
 
 La publicación de reproducción desde Engine, SoundCloud externo y Chrome todavía requiere conectarlos al mismo archivo de estado. El panel no instala capturas de entrada, atajos globales ni monitores de mandos.
 
-Para Spotify de escritorio en la misma Mac, pulsa **Conectar Spotify** en la cintilla. La detección local consulta título, artista, posición y estado sin token OAuth. El puente con catálogo sigue siendo necesario para adjuntar letras y marcas VTT.
+Con Spotify de escritorio en la misma Mac, **Conectar Spotify** lee la reproducción sin token OAuth. La lista de fuentes muestra los vínculos de DistroKid, SoundCloud y Suno que constan en el catálogo cotejado.
+
+Para vincular letras, crea `recordings.json` en el directorio de soporte del overlay con registros de la misma forma que `catalog-evidence.json`, más `lyrics` (texto) y/o `cues` (objetos `start`, `end` en segundos y `text`). Usa el ID exacto de Spotify. También puedes incluir este archivo en un build privado pasando su ruta en `BLACKMAMBA_RECORDINGS_FILE`.
+
+El respaldo de SoundCloud consulta el permalink cotejado con el token OAuth disponible en el proceso. Solo acepta texto después de una línea independiente `Letra:` o `Lyrics:`. Si la consulta no obtiene letra, espera dos minutos antes de reintentar para esa URL. El texto recuperado se muestra sin marcas de sincronización.
+
+El historial local `listening-history.jsonl` registra una escucha al observar 30 segundos de avance de reproducción en una toma. Cuenta observaciones de la Mac, no cifras oficiales de plataformas. Una pausa no incrementa el contador.
