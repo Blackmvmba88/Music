@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="es">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BlackMamba Music · Grabaciones</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #11131b; color: #f1edf8; }
+  body { max-width: 72rem; margin: auto; padding: 2rem; }
+  a { color: #c9a8ff; }
+  header, section { margin-bottom: 1.5rem; }
+  .layout { display: grid; grid-template-columns: minmax(14rem,1fr) minmax(0,2fr); gap: 1rem; }
+  .card { background: #1c1f2c; border: 1px solid #39374a; border-radius: 1rem; padding: 1rem; }
+  label { display: block; margin-bottom: .7rem; }
+  input, select, textarea, button { font: inherit; max-width: 100%; }
+  select, textarea { width: 100%; box-sizing: border-box; }
+  #queue { min-height: 21rem; }
+  dt { color: #c9a8ff; margin-top: .6rem; } dd { margin-left: 0; overflow-wrap: anywhere; }
+  audio, iframe { width: 100%; } iframe { border: 0; }
+  img { max-width: min(100%, 18rem); object-fit: contain; }
+  @media (max-width: 650px) { .layout { grid-template-columns: 1fr; } }
+</style>
+<header><a href="/music">Volver a Music</a><h1>Grabaciones</h1></header>
+<section class="card">
+  <label>Cruce SoundCloud <input id="soundcloud" type="file" accept=".csv,text/csv"></label>
+  <label>Catálogo histórico DistroKid <input id="distrokid" type="file" accept=".csv,text/csv"></label>
+  <button id="load">Importar catálogos</button>
+  <p id="status" role="status"></p>
+</section>
+<main class="layout">
+  <section class="card">
+    <label>Buscar grabación <input id="search" type="search"></label>
+    <label>Cola de revisión <select id="queue" size="14"></select></label>
+  </section>
+  <section id="detail" class="card" hidden></section>
+</main>
+<script type="module" src="./station.js"></script>
+</html>

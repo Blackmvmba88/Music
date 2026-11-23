@@ -1131,6 +1131,7 @@ export function App() {
         <div className="nav-links">
           <a href="#music">Música</a>
           <a href="/probables">Probables</a>
+          <a href="/records/index.html">Grabaciones</a>
           <a className="school-link" href="/school">Escuela de Música</a>
           <a href="#about">Nosotros</a>
         </div>

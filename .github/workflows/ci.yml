@@ -2,16 +2,47 @@ name: CI
 on:
   push:
   pull_request:
+
 jobs:
   validate:
+    name: ${{ matrix.stage }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [catalog, quality, coverage, vite-electron]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Configure Node.js 22
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm run doctor
-      - run: npm run check
+      - name: Report versions
+        run: |
+          node --version
+          npm --version
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check project prerequisites
+        run: npm run doctor
+      - name: Test recording catalog
+        if: matrix.stage == 'catalog'
+        run: node --test scripts/test-records-catalog.mjs
+      - name: Lint source
+        if: matrix.stage == 'quality'
+        run: npm run lint
+      - name: Typecheck source
+        if: matrix.stage == 'quality'
+        run: npm run typecheck
+      - name: Test with coverage
+        if: matrix.stage == 'coverage'
+        run: npm run test:coverage
+      - name: Build Vite frontend
+        if: matrix.stage == 'vite-electron'
+        run: npm run build
+      - name: Check Electron entrypoint syntax
+        if: matrix.stage == 'vite-electron'
+        run: node --check electron/main.cjs
