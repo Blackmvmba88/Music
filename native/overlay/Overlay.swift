@@ -350,7 +350,7 @@ final class OverlayController: NSObject, NSApplicationDelegate {
                         trackId: fields[2].split(separator: ":").last.map(String.init),
                         playing: fields[5] == "true",
                         positionMs: Double(fields[4].replacingOccurrences(of: ",", with: ".")).map { $0 * 1000 },
-                        durationMs: Double(fields[3]),
+                        durationMs: Double(fields[3]).map { $0 < 10_000 ? $0 * 1000 : $0 },
                         observedAtMs: Date().timeIntervalSince1970 * 1000, lyrics: nil, cues: nil
                     )
                 } else {
@@ -398,6 +398,11 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         if exact {
             playback.lyrics = playback.lyrics ?? entry?.lyrics
             playback.cues = playback.cues ?? entry?.cues
+        }
+        if playback.lyrics == nil, playback.cues?.isEmpty != false,
+           let match = catalog.bankLyrics(for: playback) {
+            playback.lyrics = match.lyrics
+            state.sources.merge(match.sources) { existing, _ in existing }
         }
         if playback.lyrics == nil, playback.cues?.isEmpty != false,
            let urls = entry?.sources["SoundCloud"], urls.count == 1, let url = urls.first {

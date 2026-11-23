@@ -24,6 +24,9 @@ struct CatalogEntry: Decodable {
 @MainActor
 final class OverlayCatalog {
     private let bundled: [CatalogEntry]
+    private let bundledBank: [CatalogEntry]
+    private var userBank: [CatalogEntry] = []
+    private var userModifiedAt: Date?
     private var retryAfter: [String: Date] = [:]
     private var remoteLyrics: [String: String] = [:]
     private var previous: Playback?
@@ -35,6 +38,7 @@ final class OverlayCatalog {
         let root = FileManager.default.homeDirectoryForCurrentUser
         directory = overrideDirectory ?? root.appendingPathComponent("Library/Application Support/BlackMamba Overlay", isDirectory: true)
         bundled = Self.load(Bundle.main.url(forResource: "catalog-evidence", withExtension: "json"))
+        bundledBank = Self.load(Bundle.main.url(forResource: "recordings", withExtension: "json"))
     }
 
     private static func load(_ url: URL?) -> [CatalogEntry] {
@@ -42,11 +46,27 @@ final class OverlayCatalog {
         return (try? JSONDecoder().decode([CatalogEntry].self, from: data)) ?? []
     }
 
+    private func bank() -> [CatalogEntry] {
+        let file = directory.appendingPathComponent("recordings.json")
+        let version = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        if version != userModifiedAt {
+            userBank = Self.load(file)
+            userModifiedAt = version
+        }
+        return userBank.isEmpty ? bundledBank : userBank
+    }
+
+    func bankLyrics(for track: Playback) -> CatalogEntry? {
+        guard track.provider == "spotify", let duration = track.durationMs else { return nil }
+        let matches = bank().filter {
+            $0.spotifyId == nil && $0.lyrics?.isEmpty == false && $0.sources["Suno"]?.count == 1
+                && abs($0.durationMs - duration) <= 350 && $0.isCandidate(for: track)
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
     func resolve(_ track: Playback) -> (CatalogEntry?, Bool) {
-        let userFile = directory.appendingPathComponent("recordings.json")
-        let local = FileManager.default.fileExists(atPath: userFile.path)
-            ? Self.load(userFile)
-            : Self.load(Bundle.main.url(forResource: "recordings", withExtension: "json"))
+        let local = bank()
         if let id = track.trackId, track.provider == "spotify" {
             let exact = local.filter { $0.spotifyId == id }
             if exact.count == 1 { return (exact[0], true) }
