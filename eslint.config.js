@@ -40,7 +40,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["scripts/*.mjs", "vite.config.ts"],
+    files: ["scripts/*.mjs", "electron/*.mjs", "vite.config.ts"],
     languageOptions: { globals: globals.node },
   },
 );
