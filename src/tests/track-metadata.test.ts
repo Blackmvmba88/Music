@@ -16,4 +16,15 @@ describe("track metadata precedence", () => {
     expect(mergeTrackMetadata({ lyrics: "USB", title: "Original" }, { title: "Editado" }))
       .toMatchObject({ lyrics: "USB", title: "Editado", hasLyrics: true });
   });
+  it("does not count pending transcriptions as available lyrics", () => {
+    for (const placeholder of ["LETRA PENDIENTE", "TRANSCRIPCIÓN PENDIENTE", "TRANSCRIPCION PENDIENTE"]) {
+      expect(mergeTrackMetadata({ lyrics: placeholder, hasLyrics: true }, { lyrics: " " }))
+        .toMatchObject({ lyrics: "", hasLyrics: false });
+    }
+  });
+
+  it("recovers verified local lyrics when canonical text is only a placeholder", () => {
+    expect(mergeTrackMetadata({ lyrics: "LETRA PENDIENTE", hasLyrics: false }, { lyrics: "Texto validado" }))
+      .toMatchObject({ lyrics: "Texto validado", hasLyrics: true });
+  });
 });
