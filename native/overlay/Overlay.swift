@@ -132,7 +132,7 @@ struct OverlayView: View {
             if state.expanded {
                 Divider().opacity(backgroundOpacity)
                 lyrics
-                if !state.sources.isEmpty {
+                if !state.sources.isEmpty && (state.playback?.lyrics != nil || state.playback?.cues?.isEmpty == false) {
                     HStack {
                         ForEach(["DistroKid", "SoundCloud", "Suno"], id: \.self) { name in
                             let urls = state.sources[name] ?? []
@@ -195,6 +195,24 @@ struct OverlayView: View {
         }
     }
 
+    @ViewBuilder
+    private func missingLyrics(for track: Playback?) -> some View {
+        if let track {
+            Text("La letra todavía no está guardada en el banco.")
+            ForEach(Array((state.sources["Letra"] ?? []).enumerated()), id: \.offset) { index, url in
+                Link(index == 0 ? "Leer letra de referencia" : "Abrir video con letra", destination: url)
+                    .font(.body)
+            }
+            if track.provider == "spotify",
+               let id = track.trackId, id.range(of: #"^[A-Za-z0-9]{22}$"#, options: .regularExpression) != nil,
+               let url = URL(string: "https://open.spotify.com/track/\(id)") {
+                Link("Ver pista en Spotify", destination: url).font(.body)
+            }
+        } else {
+            Text("Esperando reproducción")
+        }
+    }
+
     private var lyrics: some View {
         TimelineView(.periodic(from: .now, by: 0.2)) { _ in
             let track = state.playback
@@ -205,7 +223,11 @@ struct OverlayView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 9) {
                         if cues.isEmpty {
-                            Text(track?.lyrics ?? "Todavía no hay letra vinculada a esta grabación.")
+                            if let text = track?.lyrics, !text.isEmpty {
+                                Text(text)
+                            } else {
+                                missingLyrics(for: track)
+                            }
                         } else {
                             ForEach(cues.indices, id: \.self) { index in
                                 Text(cues[index].text)
@@ -398,6 +420,9 @@ final class OverlayController: NSObject, NSApplicationDelegate {
         if exact {
             playback.lyrics = playback.lyrics ?? entry?.lyrics
             playback.cues = playback.cues ?? entry?.cues
+        }
+        if playback.lyrics == nil, playback.cues?.isEmpty != false {
+            playback.lyrics = catalog.importedText(for: playback)
         }
         if playback.lyrics == nil, playback.cues?.isEmpty != false,
            let match = catalog.bankLyrics(for: playback) {

@@ -33,5 +33,20 @@
       ]
     },
     "spotifyId": "61XkjIUOSc3vUPaiqE4Weh"
+  },
+  {
+    "title": "L'Homme Que J'Adore",
+    "artist": "Universal Production Music",
+    "durationMs": 175226,
+    "spotifyId": "4mHN40gYeCzmwuheLTE9j4",
+    "sources": {
+      "Letra": [
+        "https://www.youtube.com/watch?v=Jq-t9ZoX5zE",
+        "https://www.youtube.com/watch?v=d6yad7AoNxU"
+      ],
+      "Spotify": [
+        "https://open.spotify.com/track/4mHN40gYeCzmwuheLTE9j4"
+      ]
+    }
   }
 ]

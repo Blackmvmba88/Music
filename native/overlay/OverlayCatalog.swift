@@ -56,6 +56,18 @@ final class OverlayCatalog {
         return userBank.isEmpty ? bundledBank : userBank
     }
 
+    func importedText(for track: Playback) -> String? {
+        guard track.provider == "spotify", let id = track.trackId,
+              id.range(of: #"^[A-Za-z0-9]{22}$"#, options: .regularExpression) != nil else { return nil }
+        let file = directory.appendingPathComponent("lyrics", isDirectory: true)
+            .appendingPathComponent(id + ".txt")
+        guard let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+              size > 0, size <= 64_000,
+              let content = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+        let text = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
     func bankLyrics(for track: Playback) -> CatalogEntry? {
         guard track.provider == "spotify", let duration = track.durationMs else { return nil }
         let matches = bank().filter {
