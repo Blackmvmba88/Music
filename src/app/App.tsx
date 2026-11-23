@@ -19,6 +19,7 @@ import { Palette } from "@phosphor-icons/react/Palette";
 import { ArrowUp } from "@phosphor-icons/react/ArrowUp";
 import { ArrowDown } from "@phosphor-icons/react/ArrowDown";
 import { AudioVisualizer } from "./AudioVisualizer";
+import { TickerLyrics } from "./TickerLyrics";
 import { NowPlayingTicker } from "./NowPlayingTicker";
 import { SyncLyricsViewer } from "./SyncLyricsViewer";
 import { loadCatalog, loadRatings, loadTrackDetails, persistRatings } from "../api/catalog";
@@ -77,6 +78,7 @@ type Track = {
   ownership?: { status?: ReviewStatus } | null;
   soundcloudUrl?: string | null;
   soundcloudId?: string | null;
+  spotifyId?: string | null;
   sunoId?: string | null;
   sunoUrl?: string | null;
   platforms?: {
@@ -1144,6 +1146,24 @@ export function App() {
         engineTitle={playing ? track?.title : undefined}
         engineArtist={track?.artist}
         enginePlatform={track?.streamUrl ? "SoundCloud" : "Music Engine"}
+        renderLyrics={(spotify) => {
+          let item = track;
+          if (spotify) {
+            const exact = spotify.trackId ? tracks.filter((candidate) =>
+              candidate.spotifyId === spotify.trackId ||
+              candidate.platforms?.spotify?.url?.split("?")[0] === `https://open.spotify.com/track/${spotify.trackId}`
+            ) : [];
+            const isrc = spotify.isrc?.trim().toUpperCase();
+            const matches = exact.length || !isrc ? exact : tracks.filter((candidate) =>
+              candidate.isrc?.trim().toUpperCase() === isrc
+            );
+            if (matches.length !== 1) return <p>Esta grabación de Spotify aún no tiene una letra vinculada en el catálogo.</p>;
+            item = matches[0];
+          }
+          if (!item) return null;
+          return <TickerLyrics key={trackKey(item)} trackId={item.id} lyrics={item.lyrics}
+            localTime={spotify ? undefined : time} theme={theme} />;
+        }}
       />
 
       {layout === "focus" && (

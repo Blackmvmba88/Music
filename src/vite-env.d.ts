@@ -3,7 +3,7 @@
 interface Window {
   blackMambaDesktop?: {
     platform: string;
-    readSpotifyPlayback?: () => Promise<{ title: string; playing: boolean } | null>;
+    readSpotifyPlayback?: () => Promise<import("./app/NowPlayingTicker").SpotifyNowPlaying | null>;
     setCompactMode: (compact: boolean) => Promise<void>;
     extractVideoMp3: () => Promise<{
       ok: boolean;

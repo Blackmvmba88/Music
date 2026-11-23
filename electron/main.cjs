@@ -58,7 +58,7 @@ ipcMain.handle('read-spotify-playback', async (event) => {
   const read = await spotifyReader;
   const result = await read();
   return result.status === 'ready'
-    ? { title: result.state.title, playing: result.state.playing }
+    ? { title: result.state.title, playing: result.state.playing, trackId: result.state.trackId, isrc: result.state.isrc, artist: result.state.artist }
     : null;
 });
 

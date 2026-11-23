@@ -52,7 +52,17 @@ export function createSpotifyPlaybackReader({ getAccessToken, fetchImpl = fetch,
     const state = item?.type === 'track'
       ? snapshot('spotify', item.id, item.name, data.progress_ms, item.duration_ms, data.is_playing, observedAtMs)
       : null;
-    return state ? { status: 'ready', state } : { status: 'idle' };
+    if (!state) return { status: 'idle' };
+    return {
+      status: 'ready',
+      state: {
+        ...state,
+        isrc: typeof item.external_ids?.isrc === 'string' ? item.external_ids.isrc : undefined,
+        artist: Array.isArray(item.artists)
+          ? item.artists.map((artist) => artist?.name).filter((name) => typeof name === 'string').join(', ')
+          : undefined,
+      },
+    };
   }
 
   return () => {

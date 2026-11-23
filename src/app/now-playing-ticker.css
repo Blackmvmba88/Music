@@ -43,3 +43,32 @@
   .now-playing-ticker__scroll { animation: none; }
   .now-playing-ticker__viewport { overflow-x: auto; }
 }
+
+.now-playing-ticker--button {
+  width: 100%;
+  border-inline: 0;
+  text-align: start;
+  cursor: pointer;
+}
+
+.now-playing-ticker--button:focus-visible {
+  outline: 2px solid #ffca76;
+  outline-offset: -3px;
+}
+
+.now-playing-ticker--button:focus-visible .now-playing-ticker__scroll {
+  animation: none;
+}
+
+.now-playing-ticker__action {
+  flex: none;
+}
+
+.now-playing-ticker__lyrics {
+  max-height: min(45vh, 30rem);
+  overflow: auto;
+  padding: 1rem clamp(.75rem, 3vw, 2rem);
+  background: #211811;
+  color: #fff0da;
+  white-space: pre-wrap;
+}
